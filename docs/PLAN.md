@@ -110,6 +110,11 @@ Tracing is opt-in because it can export private conversation content.
   trims evidence fields, rejects unsafe citation URLs, caps decoded response bytes and
   redacts HTTP/timeout/malformed errors. Removed langchain-tavily and refreshed uv.lock.
   Nine offline HTTP tests added: 32 backend tests passed, 95% coverage; ruff/types passed.
+- Tool guards added with run-local context (no mutable state on cached agents): reject
+  invalid/oversized queries before dispatch, normalize case/whitespace for duplicate
+  prevention before awaiting, semaphore-bound execution, drop whole evidence entries
+  rather than slicing JSON. Defaults approved: 400 input / 6000 output chars, 3 parallel.
+  Seven new tests cover duplicate races, separate runs, input, concurrency and output.
 
 - User is preparing fresh OpenAI/Tavily/Wolfram keys, dev/prod GitHub OAuth Apps,
   and Cloudflare Turnstile. Never copy rag-app's .env.

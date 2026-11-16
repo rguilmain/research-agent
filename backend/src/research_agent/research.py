@@ -10,6 +10,7 @@ import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from research_agent.config import Settings
+from research_agent.guards import RunContext, ToolGuards
 from research_agent.tools import tavily_query, wikipedia_query, wolfram_query
 
 SYSTEM_PROMPT = """You are Research Agent, a web-search research assistant.
@@ -127,6 +128,7 @@ class LiveResearch:
             stream_usage=True,
         )
         middleware: list[AgentMiddleware[Any, Any, Any]] = [
+            ToolGuards(self.settings),
             ModelCallLimitMiddleware(run_limit=self.settings.max_model_calls),
             ToolCallLimitMiddleware(run_limit=self.settings.max_tool_calls, exit_behavior="end"),
         ]
@@ -135,6 +137,7 @@ class LiveResearch:
             tools=tools,
             system_prompt=SYSTEM_PROMPT,
             middleware=middleware,
+            context_schema=RunContext,
         )
         self.agents[model_id] = agent
         return agent
@@ -146,6 +149,7 @@ class LiveResearch:
             {"messages": [{"role": "user", "content": query}]},
             stream_mode=["messages", "updates"],
             config={"recursion_limit": self.settings.max_model_calls * 4},
+            context=RunContext(max_parallel=self.settings.max_parallel_tool_calls),
         ):
             if mode == "messages":
                 message, _metadata = data

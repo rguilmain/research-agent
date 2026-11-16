@@ -146,7 +146,10 @@ Tracing is opt-in because it can export private conversation content.
   dev-only minimatch/typescript-eslint chain. No forced dependency changes made.
 - Final implementation checks observed locally: uv sync --locked, ruff check/format,
   pyright, 66 backend tests (96% coverage); npm ci/lint/typecheck, 10 frontend tests,
-  build all passed. Known >500 kB bundle warning remains. Final implementation CI pending.
+  build all passed. Known >500 kB bundle warning remains. Implementation CI 43811140992
+  (d759ca0) observed successful: backend, frontend and Docker smoke. Node20 deprecation
+  warning absent from inspected updated CI logs. Production rejection also verified
+  explicitly inside rebuilt container. Six implementation commits pushed to main.
 
 - User is preparing fresh OpenAI/Tavily/Wolfram keys, dev/prod GitHub OAuth Apps,
   and Cloudflare Turnstile. Never copy rag-app's .env.

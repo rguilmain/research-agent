@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     max_tool_input_chars: int = 400
     max_tool_output_chars: int = 6000
     max_parallel_tool_calls: int = 3
+    max_context_tokens: int = 24_000
+    max_run_input_tokens: int = 120_000
 
     @model_validator(mode="after")
     def validate_runtime(self) -> "Settings":
@@ -42,6 +44,8 @@ class Settings(BaseSettings):
                 self.max_tool_input_chars,
                 self.max_tool_output_chars,
                 self.max_parallel_tool_calls,
+                self.max_context_tokens,
+                self.max_run_input_tokens,
             )
             <= 0
         ):

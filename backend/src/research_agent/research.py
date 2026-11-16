@@ -10,7 +10,7 @@ import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from research_agent.config import Settings
-from research_agent.guards import RunContext, ToolGuards
+from research_agent.guards import ModelGuards, RunContext, ToolGuards
 from research_agent.tools import tavily_query, wikipedia_query, wolfram_query
 
 SYSTEM_PROMPT = """You are Research Agent, a web-search research assistant.
@@ -128,6 +128,7 @@ class LiveResearch:
             stream_usage=True,
         )
         middleware: list[AgentMiddleware[Any, Any, Any]] = [
+            ModelGuards(self.settings),
             ToolGuards(self.settings),
             ModelCallLimitMiddleware(run_limit=self.settings.max_model_calls),
             ToolCallLimitMiddleware(run_limit=self.settings.max_tool_calls, exit_behavior="end"),
@@ -145,11 +146,12 @@ class LiveResearch:
     async def events(self, query: str, model_id: str) -> AsyncIterator[dict[str, Any]]:
         yield {"type": "run_started", "model_id": model_id, "demo": False}
         sources: dict[str, dict[str, str]] = {}
+        context = RunContext(max_parallel=self.settings.max_parallel_tool_calls)
         async for mode, data in self.agent(model_id).astream(
             {"messages": [{"role": "user", "content": query}]},
             stream_mode=["messages", "updates"],
             config={"recursion_limit": self.settings.max_model_calls * 4},
-            context=RunContext(max_parallel=self.settings.max_parallel_tool_calls),
+            context=context,
         ):
             if mode == "messages":
                 message, _metadata = data
@@ -171,4 +173,5 @@ class LiveResearch:
                                 sources[source["url"]] = source
                             yield {"type": "step", "tool": message.name, "status": "completed"}
         yield {"type": "sources", "items": list(sources.values())}
+        yield context.usage_event()
         yield {"type": "done"}

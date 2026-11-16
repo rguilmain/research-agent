@@ -1,12 +1,14 @@
 import asyncio
 import json
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from research_agent.catalog import estimate_model_cost, load_catalog
 from research_agent.config import Settings
-from research_agent.guards import RunContext, ToolGuards
+from research_agent.guards import ModelGuards, RunContext, RunLimitExceeded, ToolGuards
 
 
 def request(context, query="question", name="wikipedia", **extra):
@@ -76,3 +78,74 @@ async def test_non_json_oversize_output_dropped():
 
     result = await ToolGuards(Settings()).awrap_tool_call(request(RunContext()), handler)
     assert result.content == "Tool output exceeded its size limit."
+
+
+async def test_usage_counts_each_call_once_and_details_are_subsets():
+    ctx = RunContext()
+    guard = ModelGuards(Settings())
+    req = SimpleNamespace(
+        runtime=SimpleNamespace(context=ctx),
+        system_message=None,
+        messages=[HumanMessage(content="question")],
+        tools=[],
+    )
+
+    async def handler(req):
+        return SimpleNamespace(
+            result=[
+                AIMessage(
+                    content="answer",
+                    usage_metadata={
+                        "input_tokens": 100,
+                        "output_tokens": 30,
+                        "total_tokens": 130,
+                        "input_token_details": {"cache_read": 40},
+                        "output_token_details": {"reasoning": 20},
+                    },
+                )
+            ]
+        )
+
+    await guard.awrap_model_call(req, handler)
+    await guard.awrap_model_call(req, handler)
+    event = ctx.usage_event()
+    assert (event["input_tokens"], event["output_tokens"], event["total_tokens"]) == (200, 60, 260)
+    assert (event["cached_input_tokens"], event["reasoning_tokens"]) == (80, 40)
+    assert event["model_calls"] == 2 and not event["estimated"]
+
+
+async def test_missing_usage_estimated_and_cumulative_context_rejected():
+    ctx = RunContext()
+    settings = Settings(max_output_tokens=10, max_run_input_tokens=150, max_context_tokens=200)
+    guard = ModelGuards(settings)
+    req = SimpleNamespace(
+        runtime=SimpleNamespace(context=ctx),
+        system_message=None,
+        messages=[HumanMessage(content="x" * 100)],
+        tools=[],
+    )
+
+    async def handler(req):
+        return SimpleNamespace(result=[AIMessage(content="answer")])
+
+    await guard.awrap_model_call(req, handler)
+    assert ctx.estimated and ctx.input_tokens >= 100 and ctx.output_tokens == 10
+    with pytest.raises(RunLimitExceeded):
+        await guard.awrap_model_call(req, handler)
+    assert ctx.model_calls == 1
+    req.messages.append(HumanMessage(content="x" * 200))
+    with pytest.raises(RunLimitExceeded):
+        await guard.awrap_model_call(req, handler)
+
+
+def test_cost_estimate_requires_cached_price_and_never_adds_reasoning():
+    model = load_catalog()["gpt-6-luna"]
+    assert estimate_model_cost(model, input_tokens=100, output_tokens=30) == Decimal("0.000025")
+    with pytest.raises(ValueError, match="unverified"):
+        estimate_model_cost(model, input_tokens=100, output_tokens=30, cached_input_tokens=40)
+    priced = model.model_copy(update={"cached_input_usd_per_mtok": Decimal("0.05")})
+    assert estimate_model_cost(
+        priced, input_tokens=100, output_tokens=30, cached_input_tokens=40
+    ) == Decimal("0.000023")
+    with pytest.raises(ValueError):
+        estimate_model_cost(model, input_tokens=-1, output_tokens=30)

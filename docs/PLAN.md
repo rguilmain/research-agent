@@ -115,6 +115,12 @@ Tracing is opt-in because it can export private conversation content.
   prevention before awaiting, semaphore-bound execution, drop whole evidence entries
   rather than slicing JSON. Defaults approved: 400 input / 6000 output chars, 3 parallel.
   Seven new tests cover duplicate races, separate runs, input, concurrency and output.
+- Model middleware now checks every call's context (including system/tools and output
+  allowance) and cumulative run input before dispatch. Uses a conservative character
+  estimate; this is not a tokenizer or billing guarantee. Actual final-message usage
+  counted once per call; cached input/reasoning are subsets, never added twice.
+  Missing usage falls back to estimated input + maximum output and is flagged.
+  Usage event added; cached pricing remains unverified and cost helper fails closed.
 
 - User is preparing fresh OpenAI/Tavily/Wolfram keys, dev/prod GitHub OAuth Apps,
   and Cloudflare Turnstile. Never copy rag-app's .env.

@@ -42,7 +42,7 @@ async def test_adapter_only_streams_assistant_text_and_structured_sources():
         events = [event async for event in service.events("question", "gpt-6-luna")]
     text = "".join(event.get("text", "") for event in events)
     assert text == "Evidence-based answer"
-    assert events[-2] == {
+    assert events[-3] == {
         "type": "sources",
         "items": [{"url": "https://example.org", "title": "Evidence"}],
     }

@@ -95,6 +95,17 @@ Tracing is opt-in because it can export private conversation content.
 
 ## External setup / blockers
 
+- 2026-11-16 session baseline: clean main at 166e040, origin/main matched; observed
+  main CI run 43805907745 successful. All AGENTS.md checks passed locally: 23 backend
+  tests (95% coverage), 3 frontend tests; known bundle warning remains. No backend/.env.
+- Approved next slice: own fixed-endpoint httpx Tavily adapter (remove langchain-tavily),
+  per-run duplicate/concurrency/input/output guards, cumulative context/usage accounting,
+  runtime event validation, offline Responses/Tavily wire fixtures, account check command.
+  Fixtures will be explicitly synthetic, not recordings of live provider traffic.
+- CI cleanup: Node24 action upgrades and a Docker smoke job added; CI outcome pending.
+  Dependabot ignores Python >=3.13, TypeScript >=7 and @types/node >=25 to preserve
+  the verified Python 3.12 / TypeScript 6 / current @types/node 24 constraints.
+
 - User is preparing fresh OpenAI/Tavily/Wolfram keys, dev/prod GitHub OAuth Apps,
   and Cloudflare Turnstile. Never copy rag-app's .env.
 - gh is authenticated as rguilmain; use C:\Program Files\GitHub CLI\gh.exe if PATH is stale.

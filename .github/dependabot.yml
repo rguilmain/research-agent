@@ -8,6 +8,11 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: typescript
+        versions: ['>=7']
+      - dependency-name: '@types/node'
+        versions: ['>=25']
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -16,3 +21,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: python
+        versions: ['>=3.13']

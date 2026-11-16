@@ -121,6 +121,11 @@ Tracing is opt-in because it can export private conversation content.
   counted once per call; cached input/reasoning are subsets, never added twice.
   Missing usage falls back to estimated input + maximum output and is flagged.
   Usage event added; cached pricing remains unverified and cost helper fails closed.
+- Observed CI successes: Tavily 43809478023 (6935425), tool guards 43809747335
+  (2d97db5), context/usage 43810011317 (003e6ed). All include Docker smoke.
+- Strict runtime event schemas added at the SSE boundary and browser parser, including
+  usage subset invariants, URL safety, known tools/statuses and payload bounds. Malformed
+  service output becomes a redacted error. Local tests: 51 backend, 10 frontend passed.
 
 - User is preparing fresh OpenAI/Tavily/Wolfram keys, dev/prod GitHub OAuth Apps,
   and Cloudflare Turnstile. Never copy rag-app's .env.

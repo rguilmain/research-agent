@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from research_agent import __version__
 from research_agent.catalog import load_catalog
 from research_agent.config import Settings
+from research_agent.events import validate_event
 from research_agent.guards import RunLimitExceeded
 from research_agent.research import DemoResearch, LiveResearch, ResearchService
 from research_agent.streaming import stream_events
@@ -111,6 +112,7 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                     if event is None:
                         yield ": keep-alive\n\n"
                     else:
+                        event = validate_event(event)
                         sequence += 1
                         yield (
                             f"id: {request.state.request_id}:{sequence}\n"
@@ -131,12 +133,14 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 yield (
                     f"id: {request.state.request_id}:{sequence + 1}\ndata: "
                     + json.dumps(
-                        {
-                            "type": "error",
-                            "code": code,
-                            "message": "Research could not complete. Please try again.",
-                            "request_id": request.state.request_id,
-                        }
+                        validate_event(
+                            {
+                                "type": "error",
+                                "code": code,
+                                "message": "Research could not complete. Please try again.",
+                                "request_id": request.state.request_id,
+                            }
+                        )
                     )
                     + "\n\n"
                 )

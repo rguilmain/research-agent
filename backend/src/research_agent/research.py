@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from research_agent.config import Settings
 from research_agent.guards import ModelGuards, RunContext, ToolGuards
-from research_agent.tools import tavily_query, wikipedia_query, wolfram_query
+from research_agent.tools import safe_url, tavily_query, wikipedia_query, wolfram_query
 
 SYSTEM_PROMPT = """You are Research Agent, a web-search research assistant.
 Search for evidence before making current factual claims. Cite the exact source URLs
@@ -53,7 +53,7 @@ def extract_sources(value: Any) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     if isinstance(value, dict):
         url = value.get("url")
-        if isinstance(url, str):
+        if isinstance(url, str) and safe_url(url):
             hostname = ""
             try:
                 parsed = urlparse(url)
@@ -64,7 +64,7 @@ def extract_sources(value: Any) -> list[dict[str, str]]:
             except ValueError:
                 valid = False
             if valid:
-                result.append({"url": url, "title": str(value.get("title") or hostname)})
+                result.append({"url": url, "title": str(value.get("title") or hostname)[:200]})
         for child in value.values():
             if isinstance(child, (dict, list)):
                 result.extend(extract_sources(child))

@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from math import ceil
 from typing import Any
@@ -27,6 +28,13 @@ class RunContext:
     model_calls: int = 0
     reserved_input_tokens: int = 0
     estimated: bool = False
+    persist: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+    persistence_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def save(self) -> None:
+        if self.persist is not None:
+            async with self.persistence_lock:
+                await self.persist(self.usage_event())
 
     def __post_init__(self) -> None:
         self.semaphore = asyncio.Semaphore(self.max_parallel)
@@ -67,7 +75,17 @@ class ModelGuards(AgentMiddleware):
             raise RunLimitExceeded("Model context safety limit reached")
         context.reserved_input_tokens += estimate
         context.model_calls += 1
+        # Persist the conservative in-flight bound BEFORE dispatch. A crash or failed
+        # provider response must not turn an unknown bill into zero recorded usage.
+        before_input, before_output = context.input_tokens, context.output_tokens
+        before_estimated = context.estimated
+        context.input_tokens += estimate
+        context.output_tokens += self.settings.max_output_tokens
+        context.estimated = True
+        await context.save()
         response = await handler(request)
+        context.input_tokens, context.output_tokens = before_input, before_output
+        context.estimated = before_estimated
         # Only final model messages, never streamed chunks or graph updates, are counted.
         usages = [m.usage_metadata for m in response.result if getattr(m, "usage_metadata", None)]
         if not usages:
@@ -97,6 +115,7 @@ class ModelGuards(AgentMiddleware):
             context.reserved_input_tokens += max(
                 0, sum(u["input_tokens"] for u in usages) - estimate
             )
+        await context.save()
         return response
 
 
@@ -126,6 +145,7 @@ class ToolGuards(AgentMiddleware):
         context.seen.add(key)
         async with context.semaphore:
             context.tool_calls[call["name"]] += 1
+            await context.save()
             result = await handler(request)
         if isinstance(result, ToolMessage):
             content = result.content

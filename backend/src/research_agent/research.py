@@ -2,12 +2,15 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from research_agent.config import Settings
 from research_agent.guards import ModelGuards, RunContext, ToolGuards
@@ -75,10 +78,16 @@ def extract_sources(value: Any) -> list[dict[str, str]]:
 
 
 class LiveResearch:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient,
+        checkpointer: BaseCheckpointSaver | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client
         self.agents: dict[str, Any] = {}
+        self.checkpointer = checkpointer
 
     def agent(self, model_id: str) -> Any:
         if model_id in self.agents:
@@ -140,19 +149,34 @@ class LiveResearch:
             system_prompt=SYSTEM_PROMPT,
             middleware=middleware,
             context_schema=RunContext,
+            checkpointer=self.checkpointer,
         )
         self.agents[model_id] = agent
         return agent
 
     async def events(self, query: str, model_id: str) -> AsyncIterator[dict[str, Any]]:
+        async with aclosing(self.thread_events(query, model_id)) as events:
+            async for event in events:
+                yield event
+
+    async def thread_events(
+        self,
+        query: str,
+        model_id: str,
+        thread_id: str | None = None,
+        context: RunContext | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         yield {"type": "run_started", "model_id": model_id, "demo": False}
         sources: dict[str, dict[str, str]] = {}
-        context = RunContext(max_parallel=self.settings.max_parallel_tool_calls)
+        context = context or RunContext(max_parallel=self.settings.max_parallel_tool_calls)
+        config: RunnableConfig = {"recursion_limit": self.settings.max_model_calls * 8 + 10}
+        if thread_id:
+            config["configurable"] = {"thread_id": thread_id}
         async for mode, data in self.agent(model_id).astream(
             {"messages": [{"role": "user", "content": query}]},
             stream_mode=["messages", "updates"],
             # Middleware adds graph steps; model/tool admission limits remain authoritative.
-            config={"recursion_limit": self.settings.max_model_calls * 8 + 10},
+            config=config,
             context=context,
         ):
             if mode == "messages":

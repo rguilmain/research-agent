@@ -25,6 +25,11 @@ class Token(Event):
     text: Annotated[str, Field(min_length=1, max_length=32_000)]
 
 
+class ThreadEvent(Event):
+    type: Literal["thread"]
+    thread_id: Annotated[str, Field(pattern=r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")]
+
+
 class Step(Event):
     type: Literal["step"]
     tool: Literal["tavily_search", "wikipedia", "wolfram_alpha"]
@@ -83,7 +88,8 @@ class Error(Event):
 
 EVENT_ADAPTER = TypeAdapter(
     Annotated[
-        RunStarted | Token | Step | Sources | Usage | Done | Error, Field(discriminator="type")
+        RunStarted | ThreadEvent | Token | Step | Sources | Usage | Done | Error,
+        Field(discriminator="type"),
     ]
 )
 

@@ -5,6 +5,8 @@ describe('SSE parser', () => {
   it.each([null, { type: 'unknown' }, { type: 'token', text: 12 },
     { type: 'done', secret: 'key' }, { type: 'step', tool: 'shell', status: 'started' },
     { type: 'sources', items: [{ url: 'javascript:bad', title: 'Bad' }] },
+    { type: 'thread', thread_id: 'not-a-uuid' },
+    { type: 'thread', thread_id: '00000000-0000-4000-8000-000000000001', extra: true },
   ])('rejects malformed event %#', value => {
     expect(() => validateEvent(value)).toThrow('Invalid research event')
   })
@@ -14,6 +16,10 @@ describe('SSE parser', () => {
       tool_calls: { tavily_search: 1 }, estimated: false }
     expect(validateEvent(usage)).toEqual(usage)
     expect(() => validateEvent({ ...usage, total_tokens: 190 })).toThrow()
+  })
+  it('validates server-issued thread ids', () => {
+    const event = { type: 'thread', thread_id: '00000000-0000-4000-8000-000000000001' }
+    expect(validateEvent(event)).toEqual(event)
   })
   it('handles split frames, CRLF, keepalive comments, and multibyte text', async () => {
     const bytes = new TextEncoder().encode(': heartbeat\r\n\r\ndata: {"type":"token","text":"café"}\r\n\r\ndata: {"type":"done"}\n\n')

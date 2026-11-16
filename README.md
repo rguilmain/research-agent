@@ -30,8 +30,35 @@ Open http://localhost:5173. API docs: http://localhost:8000/docs.
 The page prominently identifies demo mode; no search or paid model call happens.
 
 For live **local development only**, set `DEMO_MODE=false`, `OPENAI_API_KEY`,
-and `TAVILY_API_KEY` in `backend/.env`. Wolfram Alpha is optional.
+`TAVILY_API_KEY`, and `DATABASE_URL` in `backend/.env`. Wolfram Alpha is optional.
+Run the database migrations below before starting the live application.
 Do not paste keys into chat, commit them, or bind this unfinished API publicly.
+
+### Optional local persistence (required for the live application)
+
+Demo mode still starts without a database. To enable owner-scoped thread metadata,
+durable run records and live-agent checkpoints, start the local-only PostgreSQL service:
+
+```powershell
+Set-Location C:\Users\richg\dev\research-agent
+docker compose up -d --wait db
+Set-Location C:\Users\richg\dev\research-agent\backend
+$env:DATABASE_URL='postgresql://research_dev:local-development-only@127.0.0.1:54329/research_agent'
+uv run research-agent-migrate
+uv run research-agent
+```
+
+The credentials above are **only for the loopback-bound development container**.
+Migrations are explicit and repeatable; application startup never creates tables.
+`uv run research-agent-cleanup` removes up to 100 expired/deleted threads per invocation
+and reconciles up to 100 stale runs. It is not scheduled automatically.
+
+**Not authentication:** all local requests share one development identity until M4.
+Do not expose this application to other users. Real prompts, assistant/tool messages
+and agent state are persisted for live conversations; demo output is never checkpointed.
+Anonymous threads expire after 24 hours; physical deletion requires the cleanup command.
+The UI retains a thread only in memory and supports **New thread**; it has no history sidebar yet.
+Interrupted threads are not resumed automatically; use a new thread.
 
 ## Models
 
@@ -53,19 +80,36 @@ Do not enable expensive models before the budget-reservation milestone.
   (synthetic fixtures, not recordings or verification of live provider access).
 - Cancellable frontend, safe Markdown, no remote tracking images, responsive MUI UI.
 - Offline backend/frontend tests, linting, type checks, committed lockfiles, CI.
+- PostgreSQL migrations, owner-scoped thread CRUD, cross-process per-thread run exclusion,
+  durable usage/status records, checkpointed live multi-turn research, and retention cleanup.
 
 ## Planned launch features
 
 Hybrid access: anonymous users pass Turnstile and get a small daily quota; GitHub
-users get more quota and saved conversations. PostgreSQL will enforce ownership,
-quotas, and atomic cost reservations across instances. Deployment target: Fly.io.
-These are **not implemented yet**. See [the milestone checklist](docs/PLAN.md).
+users get more quota and saved-history browsing. PostgreSQL already stores development
+threads and runs; real identity, quotas and atomic cost reservations are **not implemented**.
+Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
 ## Checks
 
 See [AGENTS.md](AGENTS.md) for all commands and [SECURITY.md](SECURITY.md) for
 security policy. TypeScript 6 is intentionally pinned because the installed
 typescript-eslint release rejects TypeScript 7 (see docs/ARCHITECTURE.md).
+
+PostgreSQL tests refuse to run against databases not ending in `_test`, and truncate
+their test tables. Create a **dedicated** local test database, then from the backend:
+
+```powershell
+Set-Location C:\Users\richg\dev\research-agent
+docker compose exec -T db createdb -U research_dev research_agent_test
+Set-Location C:\Users\richg\dev\research-agent\backend
+$env:TEST_DATABASE_URL='postgresql://research_dev:local-development-only@127.0.0.1:54329/research_agent_test'
+$env:REQUIRE_PG='1'
+uv run pytest
+```
+
+Without `TEST_DATABASE_URL`, only the PostgreSQL-marked tests skip. CI sets `REQUIRE_PG=1`
+and supplies a PostgreSQL service, so missing database configuration fails the suite.
 
 With Docker running, `pwsh -File scripts/smoke-docker.ps1` builds the image and
 checks non-root execution, packaged model catalog, absence of `.env` under `/app`,

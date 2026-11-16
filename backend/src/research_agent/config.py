@@ -4,10 +4,11 @@ from typing import Literal
 
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
     app_env: Literal["development", "test", "production"] = "development"
     demo_mode: bool = True
@@ -26,6 +27,26 @@ class Settings(BaseSettings):
     max_parallel_tool_calls: int = 3
     max_context_tokens: int = 24_000
     max_run_input_tokens: int = 120_000
+    database_url: SecretStr = SecretStr("")
+    thread_retention_days: int = 30
+    anon_thread_ttl_hours: int = 24
+
+    @model_validator(mode="after")
+    def validate_database(self) -> "Settings":
+        raw = self.database_url.get_secret_value()
+        if raw:
+            try:
+                url = make_url(raw)
+                valid = url.drivername in {"postgresql", "postgresql+psycopg"} and bool(
+                    url.host and url.database
+                )
+            except Exception:
+                valid = False
+            if not valid:
+                raise ValueError("DATABASE_URL must be a PostgreSQL URL with host and database")
+        if min(self.thread_retention_days, self.anon_thread_ttl_hours) <= 0:
+            raise ValueError("Retention limits must be positive")
+        return self
 
     @model_validator(mode="after")
     def validate_runtime(self) -> "Settings":

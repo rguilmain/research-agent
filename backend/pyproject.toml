@@ -14,6 +14,11 @@ dependencies = [
     "httpx>=0.28,<1",
     "langchain>=1,<2",
     "langchain-openai>=1,<2",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "alembic>=1.14,<2",
+    "psycopg[binary]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
+    "langgraph-checkpoint-postgres>=3,<4",
 ]
 
 [dependency-groups]
@@ -45,6 +50,8 @@ addopts = "--cov=research_agent --cov-report=term-missing"
 [project.scripts]
 research-agent = "research_agent.main:run"
 research-agent-check-models = "research_agent.check_models:run"
+research-agent-migrate = "research_agent.maintenance:migrate"
+research-agent-cleanup = "research_agent.maintenance:cleanup"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

@@ -20,7 +20,7 @@ export default function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [connectionError, setConnectionError] = useState('')
   const [demo, setDemo] = useState<boolean | null>(null)
-  const { answer, error, busy, sources, steps, research, stop } = useResearch()
+  const { answer, error, busy, sources, steps, research, stop, reset } = useResearch()
 
   useEffect(() => {
     const abort = new AbortController()
@@ -75,6 +75,7 @@ export default function App() {
           </FormControl>
           {busy ? <Button variant="outlined" onClick={stop}>Stop</Button> :
             <Button type="submit" variant="contained" disabled={!query.trim() || !model}>Research</Button>}
+          <Button disabled={busy} onClick={reset}>New thread</Button>
         </Stack>
       </Paper>
       {busy && <Typography role="status" sx={{ mt: 3 }}>Researching…</Typography>}

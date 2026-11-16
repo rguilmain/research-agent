@@ -4,29 +4,38 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from uuid import uuid4
+from contextlib import AsyncExitStack, aclosing, asynccontextmanager
+from typing import Annotated
+from uuid import UUID, uuid4
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, Request
+from anyio import CancelScope
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.exc import SQLAlchemyError
 
 from research_agent import __version__
 from research_agent.catalog import load_catalog
 from research_agent.config import Settings
+from research_agent.db import Database, configure_event_loop
 from research_agent.events import validate_event
-from research_agent.guards import RunLimitExceeded
+from research_agent.guards import RunContext, RunLimitExceeded
+from research_agent.repository import Conflict, Identity, NotFound, Repository
 from research_agent.research import DemoResearch, LiveResearch, ResearchService
 from research_agent.streaming import stream_events
+from research_agent.threads_api import current_principal
+from research_agent.threads_api import router as threads_router
 
 logger = logging.getLogger(__name__)
 
 
 class ResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1, max_length=2000)
     model_id: str | None = Field(default=None, max_length=100)
+    thread_id: UUID | None = None
 
     @field_validator("query")
     @classmethod
@@ -38,19 +47,46 @@ class ResearchRequest(BaseModel):
 
 def create_app(settings: Settings | None = None, service: ResearchService | None = None) -> FastAPI:
     config = settings or Settings()
+    if not config.demo_mode and not config.database_url.get_secret_value() and service is None:
+        raise ValueError("Live application requires DATABASE_URL and explicit migrations")
     catalog = load_catalog()
     if config.default_model not in catalog or not catalog[config.default_model].enabled:
         raise ValueError("DEFAULT_MODEL must identify an enabled catalog entry")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        async with httpx.AsyncClient(follow_redirects=False) as client:
+        async with AsyncExitStack() as stack:
+            client = await stack.enter_async_context(httpx.AsyncClient(follow_redirects=False))
+            db = None
+            app.state.repository = None
+            if config.database_url.get_secret_value():
+                db = Database(config)
+                await stack.enter_async_context(db.open())
+                app.state.repository = Repository(db, config)
+                await app.state.repository.recover()
+            app.state.database = db
             app.state.research = service or (
-                DemoResearch() if config.demo_mode else LiveResearch(config, client)
+                DemoResearch()
+                if config.demo_mode
+                else LiveResearch(config, client, db.checkpointer if db else None)
             )
             yield
 
     app = FastAPI(title="Research Agent", version=__version__, lifespan=lifespan)
+    app.state.settings = config
+    app.include_router(threads_router)
+
+    @app.exception_handler(NotFound)
+    async def not_found(_request, _exc):
+        return JSONResponse(status_code=404, content={"detail": "Thread not found"})
+
+    @app.exception_handler(Conflict)
+    async def conflict(_request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(SQLAlchemyError)
+    async def storage_error(_request, _exc):
+        return JSONResponse(status_code=503, content={"detail": "Storage unavailable"})
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -69,6 +105,11 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
 
     @app.get("/readyz")
     async def ready():
+        if app.state.database:
+            try:
+                await app.state.database.ready()
+            except Exception:
+                return JSONResponse(status_code=503, content={"status": "unavailable"})
         return {"status": "ok", "mode": "demo" if config.demo_mode else "live-development"}
 
     @app.get("/api/v1/config")
@@ -86,7 +127,11 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
         }
 
     @app.post("/api/v1/research", response_model=None)
-    async def research(body: ResearchRequest, request: Request):
+    async def research(
+        body: ResearchRequest,
+        request: Request,
+        owner: Annotated[Identity, Depends(current_principal)],
+    ):
         model_id = body.model_id or config.default_model
         if model_id not in catalog or not catalog[model_id].enabled:
             return JSONResponse(
@@ -101,23 +146,77 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 media_type="application/problem+json",
             )
 
+        repo: Repository | None = app.state.repository
+        thread_id = body.thread_id
+        run_id = None
+        lock = AsyncExitStack()
+        if repo:
+            if thread_id is None:
+                thread_id = (await repo.create_thread(owner, model_id))["id"]
+            await repo.get_thread(owner, thread_id)
+            try:
+                await lock.enter_async_context(repo.thread_lock(thread_id))
+                run_id = await repo.start_run(owner, thread_id, model_id)
+            except BaseException:
+                await lock.aclose()
+                raise
+        elif thread_id is not None:
+            raise HTTPException(503, "Persistence is not configured")
+
+        async def persist(usage: dict):
+            if repo and run_id:
+                await repo.save_usage(run_id, usage)
+
+        context = RunContext(max_parallel=config.max_parallel_tool_calls, persist=persist)
+
         async def stream() -> AsyncIterator[str]:
             sequence = 0
+            status, error_code = "cancelled", None
             try:
-                async for event in stream_events(
-                    request.app.state.research.events(body.query, model_id),
-                    disconnected=request.is_disconnected,
-                    timeout_s=config.run_timeout_s,
-                ):
-                    if event is None:
-                        yield ": keep-alive\n\n"
-                    else:
-                        event = validate_event(event)
-                        sequence += 1
-                        yield (
-                            f"id: {request.state.request_id}:{sequence}\n"
-                            f"data: {json.dumps(event)}\n\n"
+                service = request.app.state.research
+                source = (
+                    service.thread_events(body.query, model_id, str(thread_id), context)
+                    if repo and isinstance(service, LiveResearch)
+                    else service.events(body.query, model_id)
+                )
+                if thread_id:
+                    sequence += 1
+                    yield (
+                        f"id: {request.state.request_id}:{sequence}\ndata: "
+                        + json.dumps(
+                            validate_event({"type": "thread", "thread_id": str(thread_id)})
                         )
+                        + "\n\n"
+                    )
+                heartbeat_at = asyncio.get_running_loop().time()
+                async with aclosing(
+                    stream_events(
+                        source,
+                        disconnected=request.is_disconnected,
+                        timeout_s=config.run_timeout_s,
+                    )
+                ) as events:
+                    async for event in events:
+                        clock = asyncio.get_running_loop().time()
+                        if repo and run_id and clock - heartbeat_at >= 10:
+                            await repo.heartbeat(run_id)
+                            heartbeat_at = clock
+                        if event is None:
+                            yield ": keep-alive\n\n"
+                        else:
+                            event = validate_event(event)
+                            if event["type"] == "usage":
+                                await persist(event)
+                            if event["type"] in {"done", "error"}:
+                                status = "completed" if event["type"] == "done" else "failed"
+                                error_code = event.get("code")
+                                if repo and run_id:
+                                    await repo.finish_run(run_id, status, error_code)
+                            sequence += 1
+                            yield (
+                                f"id: {request.state.request_id}:{sequence}\n"
+                                f"data: {json.dumps(event)}\n\n"
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -130,6 +229,7 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 code = "research_timeout" if isinstance(exc, TimeoutError) else "research_failed"
                 if isinstance(exc, RunLimitExceeded):
                     code = "run_limit_exceeded"
+                status, error_code = "failed", code
                 yield (
                     f"id: {request.state.request_id}:{sequence + 1}\ndata: "
                     + json.dumps(
@@ -144,6 +244,15 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                     )
                     + "\n\n"
                 )
+            finally:
+                # Starlette cancellation uses an AnyIO cancel scope. Shield only bounded
+                # bookkeeping, never provider work, so disconnects still record usage.
+                with CancelScope(shield=True):
+                    try:
+                        if repo and run_id:
+                            await repo.finish_run(run_id, status, error_code)
+                    finally:
+                        await lock.aclose()
 
         return StreamingResponse(
             stream(),
@@ -158,5 +267,11 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
 
 
 def run() -> None:
+    configure_event_loop()
     settings = Settings()
-    uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
+    uvicorn.run(
+        create_app(settings),
+        host=settings.host,
+        port=settings.port,
+        loop="research_agent.db:selector_loop_factory",
+    )

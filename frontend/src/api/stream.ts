@@ -1,5 +1,6 @@
 export type ResearchEvent =
   | { type: 'run_started'; model_id: string; demo: boolean }
+  | { type: 'thread'; thread_id: string }
   | { type: 'token'; text: string }
   | { type: 'step'; tool: string; status: 'started' | 'completed' }
   | { type: 'sources'; items: { url: string; title: string }[] }
@@ -32,6 +33,7 @@ export function validateEvent(value: unknown): ResearchEvent {
   let valid = false
   switch (v.type) {
     case 'run_started': valid = keys(v, ['type', 'model_id', 'demo']) && text(v.model_id) && typeof v.demo === 'boolean'; break
+    case 'thread': valid = keys(v, ['type', 'thread_id']) && typeof v.thread_id === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v.thread_id); break
     case 'token': valid = keys(v, ['type', 'text']) && text(v.text, 32000); break
     case 'step': valid = keys(v, ['type', 'tool', 'status']) && tools.includes(String(v.tool)) && ['started', 'completed'].includes(String(v.status)); break
     case 'sources': valid = keys(v, ['type', 'items']) && Array.isArray(v.items) && v.items.length <= 100 && v.items.every(s => record(s) && keys(s, ['url', 'title']) && safeUrl(s.url) && text(s.title)); break

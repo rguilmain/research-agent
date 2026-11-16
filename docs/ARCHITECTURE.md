@@ -28,13 +28,16 @@ evidence entries within the output cap. Every tool bounds decoded response bytes
 Model guards check full system/message/tool context plus output allowance before every
 call, and accumulate conservative input estimates or larger observed usage across calls.
 Final-message usage is counted once, never from streamed chunks/updates; cached input and
-reasoning are subsets. Missing usage is flagged and estimated conservatively. Failed or
-cancelled runs do not yet persist partial usage/reservations; durable recovery is M3/M5.
+reasoning are subsets. Missing usage is flagged and estimated conservatively. With a
+database, in-flight conservative usage is persisted before each model dispatch and
+replaced by final observed usage. Failures/cancellations retain estimates; this is NOT
+a billing guarantee or monetary reservation. Atomic budget reservations remain M5.
 SDK retries remain bounded to one; future budget reservations must cover both attempts.
 Strict Pydantic SSE payload validation and corresponding browser runtime checks reject
 unknown fields/types/tools, unsafe source URLs, invalid usage totals and oversized frames.
 
-No persistence, authentication, cost enforcement, or public deployment exists yet.
+PostgreSQL persistence exists for local development; authentication, cost enforcement
+and public deployment do not.
 APP_ENV=production fails validation intentionally. Demo mode is not an auth bypass
 for eventual production: production must never allow it.
 
@@ -50,7 +53,7 @@ Cloudflare Turnstile protects anonymous admission, not authorization.
 
 1. Python 3.12 and uv; all tool invocations use backend's own environment.
 2. GPT-6 Luna configurable default; runtime selection limited to a server catalog.
-   Cache agents per model initially; shared checkpointer/thread locking comes later.
+   Cache agents per model with a shared PostgreSQL checkpointer and per-run runtime context.
 3. TypeScript 6, not 7: npm rejected TS7 because typescript-eslint 8.72.2 requires
    TypeScript >=4.8.4 <6.1.0. No peer-dependency overrides were used for TypeScript.
 4. MUI 9 uses sx instead of removed direct system-style props.
@@ -60,6 +63,52 @@ Cloudflare Turnstile protects anonymous admission, not authorization.
 7. Secret-bearing exceptions never reach tool messages or logs; log class/request ID.
 8. The root Dockerfile is a development foundation until static serving/security
    gates are complete. Do not mistake a successful image build for launch readiness.
+
+## Development persistence (M3a)
+
+SQLAlchemy 2 async sessions own `principals`, `threads` and `runs`. Alembic owns their
+schema. `research-agent-migrate` explicitly applies Alembic followed by the installed
+checkpointer's idempotent `setup()`; the two schema managers are intentionally separate
+because checkpoint migrations include nontransactional index operations. Application
+startup checks both schema versions and never creates tables. Migration resources ship
+inside the Python package so the same command works in the development container.
+
+Both SQLAlchemy and the checkpointer use psycopg 3. The checkpointer has a separate
+autocommit/dict-row pool and a strict serializer with no pickle fallback. Windows entry
+points explicitly use a selector event loop. Database URLs are secret settings; pool
+exception messages are redacted and SQL parameter logging is disabled.
+
+Every metadata query is owner-scoped; unknown/foreign/deleted/expired resources return
+404. This is NOT authentication: all development requests share one fixed anonymous
+identity until M4. No client-provided owner ID is accepted. Production remains blocked.
+Threads fix their model and demo/live mode at creation. Demo run metadata is explicitly
+marked, but demo answers are never checkpointed. GET thread returns metadata only, not
+raw checkpoint state, reasoning or tool arguments. History rendering remains M3b/M6.
+
+A dedicated SQL connection holds a session advisory lock per thread while streaming;
+row locks and a unique active-run index additionally serialize run admission. Conflicts
+return 409 before SSE headers. Locks require direct/session-mode PostgreSQL connections,
+NOT transaction-mode proxies. Pool capacity bounds this foundation; shared admission,
+explicit global concurrency controls, and budgets remain M5. Failed/cancelled/abandoned
+threads reject new runs rather than replaying potentially unfinished tool operations.
+
+Model middleware writes estimated in-flight usage before provider dispatch and observed
+final usage afterwards. Tool admission counts are persisted too; concurrent writes are
+serialized per run. Terminal status is saved before `done`. Disconnect bookkeeping is
+shielded from AnyIO cancellation. Recovery marks stale runs (>5 minutes, batch 100) as
+abandoned only if their thread lock is free. A worker retaining a lock is never reclaimed.
+SDK retries remain bounded but are NOT separately accounted/reserved; monetary crash
+reconciliation is not solved by this token ledger and remains a production blocker.
+
+Anonymous thread expiry defaults to 24 hours from creation; user-kind retention defaults
+to 30 days. Access expires immediately, while physical deletion requires the explicit
+cleanup command. Soft-deleted threads are purged after the retention interval (anonymous
+expiry may purge earlier). Cleanup skips active/locked threads, deletes checkpoint state
+first, then metadata/runs; a crash between these steps is safe to retry. Cleanup is not
+scheduled and must be run repeatedly for backlogs. Conversation/tool/checkpoint content
+is private retained data, not logs; encryption, formal retention policy, real identity and
+deployment backup/deletion guarantees remain launch work. PostgreSQL test databases must
+end in `_test`; tests truncate only that dedicated database. CI requires these tests.
 
 ## Known dependency warning
 

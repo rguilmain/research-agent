@@ -10,7 +10,7 @@ import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from research_agent.config import Settings
-from research_agent.tools import wikipedia_query, wolfram_query
+from research_agent.tools import tavily_query, wikipedia_query, wolfram_query
 
 SYSTEM_PROMPT = """You are Research Agent, a web-search research assistant.
 Search for evidence before making current factual claims. Cite the exact source URLs
@@ -90,8 +90,13 @@ class LiveResearch:
         )
         from langchain_core.tools import tool
         from langchain_openai import ChatOpenAI
-        from langchain_tavily import TavilySearch
-        from langchain_tavily._utilities import TavilySearchAPIWrapper
+
+        @tool
+        async def tavily_search(query: str) -> str:
+            """Search the web for current evidence. Returns titles, URLs, and excerpts."""
+            return await tavily_query(
+                self.client, self.settings.tavily_api_key.get_secret_value(), query
+            )
 
         @tool
         async def wikipedia(query: str) -> str:
@@ -106,12 +111,7 @@ class LiveResearch:
             )
 
         tools: list[Any] = [
-            TavilySearch(
-                max_results=3,
-                search_depth="basic",
-                include_raw_content=False,
-                api_wrapper=TavilySearchAPIWrapper(tavily_api_key=self.settings.tavily_api_key),
-            ),
+            tavily_search,
             wikipedia,
         ]
         if self.settings.wolfram_alpha_appid.get_secret_value():

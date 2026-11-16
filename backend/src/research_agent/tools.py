@@ -1,6 +1,72 @@
 """Read-only tools; credentials and provider error URLs never enter model context."""
 
+import json
+from urllib.parse import urlparse
+
 import httpx
+
+
+def safe_url(value: object) -> bool:
+    if not isinstance(value, str) or len(value) > 2000 or any(c.isspace() for c in value):
+        return False
+    try:
+        parsed = urlparse(value)
+        return bool(
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+        )
+    except ValueError:
+        return False
+
+
+async def bounded_json(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> object:
+    """Bound decoded response bytes, including compressed bodies; never follow redirects."""
+    async with client.stream(method, url, follow_redirects=False, **kwargs) as response:
+        response.raise_for_status()
+        body = bytearray()
+        async for chunk in response.aiter_bytes(chunk_size=8192):
+            body.extend(chunk)
+            if len(body) > 256_000:
+                raise ValueError("Tool response too large")
+        return json.loads(body)
+
+
+async def tavily_query(client: httpx.AsyncClient, api_key: str, query: str) -> str:
+    """Search a fixed endpoint with server-controlled depth, result count and fields."""
+    try:
+        data = await bounded_json(
+            client,
+            "POST",
+            "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "query": query,
+                "max_results": 3,
+                "search_depth": "basic",
+                "include_answer": False,
+                "include_raw_content": False,
+                "include_images": False,
+                "auto_parameters": False,
+            },
+            timeout=30,
+        )
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            raise ValueError("Invalid search response")
+        results = []
+        for item in data["results"][:3]:
+            if isinstance(item, dict) and safe_url(item.get("url")):
+                results.append(
+                    {
+                        "title": str(item.get("title") or "Source")[:200],
+                        "url": item["url"],
+                        "content": str(item.get("content") or "")[:1000],
+                    }
+                )
+        return json.dumps({"results": results}, ensure_ascii=False)
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+        return "Tavily is temporarily unavailable."
 
 
 async def wolfram_query(client: httpx.AsyncClient, app_id: str, query: str) -> str:

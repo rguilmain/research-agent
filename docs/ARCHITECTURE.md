@@ -8,6 +8,11 @@ LangChain create_agent per enabled model. Tools are read-only and async. Wikiped
 uses a small fixed-endpoint HTTP adapter rather than the broad community package.
 Wolfram retains the prototype's User-Agent/parsing behavior but redacts failures.
 
+Tavily uses our own fixed-endpoint httpx adapter, not langchain-tavily (whose aiohttp
+transport cannot be intercepted by respx). The server fixes basic depth, three results,
+and excludes generated answers, images and raw content. Response bytes and evidence
+fields are bounded; errors never include provider bodies or credentials.
+
 The SSE lifecycle holds one provider read in flight, emits heartbeats without cancelling
 that read, polls disconnects during silence, and explicitly closes the source on timeout,
 terminal events, or cancellation. Per-response event IDs support diagnostics only, not

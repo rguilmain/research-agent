@@ -102,9 +102,14 @@ Tracing is opt-in because it can export private conversation content.
   per-run duplicate/concurrency/input/output guards, cumulative context/usage accounting,
   runtime event validation, offline Responses/Tavily wire fixtures, account check command.
   Fixtures will be explicitly synthetic, not recordings of live provider traffic.
-- CI cleanup: Node24 action upgrades and a Docker smoke job added; CI outcome pending.
+- CI cleanup: Node24 action upgrades and a Docker smoke job passed in observed CI
+  run 43809170669 (09c55eb). Approved PRs #1, #7, #2, #3, #4 closed.
   Dependabot ignores Python >=3.13, TypeScript >=7 and @types/node >=25 to preserve
   the verified Python 3.12 / TypeScript 6 / current @types/node 24 constraints.
+- Tavily adapter implemented using the shared httpx client; server fixes search options,
+  trims evidence fields, rejects unsafe citation URLs, caps decoded response bytes and
+  redacts HTTP/timeout/malformed errors. Removed langchain-tavily and refreshed uv.lock.
+  Nine offline HTTP tests added: 32 backend tests passed, 95% coverage; ruff/types passed.
 
 - User is preparing fresh OpenAI/Tavily/Wolfram keys, dev/prod GitHub OAuth Apps,
   and Cloudflare Turnstile. Never copy rag-app's .env.

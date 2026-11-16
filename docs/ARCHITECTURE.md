@@ -8,6 +8,12 @@ LangChain create_agent per enabled model. Tools are read-only and async. Wikiped
 uses a small fixed-endpoint HTTP adapter rather than the broad community package.
 Wolfram retains the prototype's User-Agent/parsing behavior but redacts failures.
 
+The SSE lifecycle holds one provider read in flight, emits heartbeats without cancelling
+that read, polls disconnects during silence, and explicitly closes the source on timeout,
+terminal events, or cancellation. Per-response event IDs support diagnostics only, not
+replay/resumption. Only assistant text blocks are emitted, not tool text or reasoning.
+Synthetic LangChain messages test the adapter; provider wire-format integration remains.
+
 No persistence, authentication, cost enforcement, or public deployment exists yet.
 APP_ENV=production fails validation intentionally. Demo mode is not an auth bypass
 for eventual production: production must never allow it.

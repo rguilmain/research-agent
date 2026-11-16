@@ -45,6 +45,7 @@ Do not enable expensive models before the budget-reservation milestone.
 
 - Validated settings and model allowlisting; lifespan-managed async HTTP client.
 - POST research endpoint with incremental SSE text, tool activity, and source events.
+- Heartbeats and per-response event IDs; timeout/disconnect cleanup even during provider silence.
 - Async read-only Tavily, Wikipedia, and optional Wolfram tools; bounded agent calls.
 - Cancellable frontend, safe Markdown, no remote tracking images, responsive MUI UI.
 - Offline backend/frontend tests, linting, type checks, committed lockfiles, CI.
@@ -61,5 +62,10 @@ These are **not implemented yet**. See [the milestone checklist](docs/PLAN.md).
 See [AGENTS.md](AGENTS.md) for all commands and [SECURITY.md](SECURITY.md) for
 security policy. TypeScript 6 is intentionally pinned because the installed
 typescript-eslint release rejects TypeScript 7 (see docs/ARCHITECTURE.md).
+
+With Docker running, `pwsh -File scripts/smoke-docker.ps1` builds the image and
+checks non-root execution, packaged model catalog, absence of `.env` under `/app`,
+HTTP health, and a complete demo stream. Its temporary container is removed afterwards.
+This does not verify the unfinished production security controls or live providers.
 
 No keys from the old prototype were copied. The old repository remains unchanged.

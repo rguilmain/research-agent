@@ -18,6 +18,11 @@
 - [x] M2a: streaming API and UI, cancellation control, safe Markdown and structured sources.
 - [ ] M2b: verified provider-stream adapter tests, disconnect and timeout tests, heartbeat,
   runtime event validation, stable event ids, run state, input/context limits, usage accounting.
+  Completed subset: heartbeat, per-response event IDs (not replay/resume), silent-provider
+  disconnect polling, timeout/cancellation cleanup, unexpected-EOF detection, concurrent-run
+  tests, and synthetic LangChain message-adapter tests excluding tool/reasoning text.
+  Still required: actual mocked Responses/Tavily wire streams, schema validation,
+  usage accounting, context bounds, and durable run state.
 - [ ] M3: PostgreSQL (dev/CI/prod), SQLAlchemy + Alembic, LangGraph checkpointer,
   thread APIs, owner checks, retention cleanup. Serialize concurrent writes per thread.
 - [ ] M4: server-side GitHub OAuth (state, PKCE if supported), opaque hashed sessions,
@@ -94,7 +99,11 @@ Tracing is opt-in because it can export private conversation content.
   and Cloudflare Turnstile. Never copy rag-app's .env.
 - gh is authenticated as rguilmain; use C:\Program Files\GitHub CLI\gh.exe if PATH is stale.
 - Fly CLI was not detected. No Fly app, database, billing changes, or deployment yet.
-- Docker CLI exists but local Linux daemon was unavailable at initial validation.
+- Docker daemon is now running. Image build, non-root UID, packaged catalog,
+  absence of /app .env files, production startup rejection, HTTP health, and demo
+  SSE completion verified. Repeat with `pwsh -File scripts/smoke-docker.ps1`.
+- Baseline after streaming lifecycle changes: 23 backend tests, 95% coverage;
+  frontend lint/types and 3 tests passed. No paid provider calls performed.
 - Provider account/model access and live streaming have NOT been tested.
 
 ## Correcting earlier planning assumptions

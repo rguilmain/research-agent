@@ -17,6 +17,7 @@ from research_agent import __version__
 from research_agent.catalog import load_catalog
 from research_agent.config import Settings
 from research_agent.research import DemoResearch, LiveResearch, ResearchService
+from research_agent.streaming import stream_events
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +100,21 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
             )
 
         async def stream() -> AsyncIterator[str]:
+            sequence = 0
             try:
-                async with asyncio.timeout(config.run_timeout_s):
-                    async for event in request.app.state.research.events(body.query, model_id):
-                        if await request.is_disconnected():
-                            return
-                        yield f"data: {json.dumps(event)}\n\n"
+                async for event in stream_events(
+                    request.app.state.research.events(body.query, model_id),
+                    disconnected=request.is_disconnected,
+                    timeout_s=config.run_timeout_s,
+                ):
+                    if event is None:
+                        yield ": keep-alive\n\n"
+                    else:
+                        sequence += 1
+                        yield (
+                            f"id: {request.state.request_id}:{sequence}\n"
+                            f"data: {json.dumps(event)}\n\n"
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -114,12 +124,13 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                     request.state.request_id,
                     type(exc).__name__,
                 )
+                code = "research_timeout" if isinstance(exc, TimeoutError) else "research_failed"
                 yield (
-                    "data: "
+                    f"id: {request.state.request_id}:{sequence + 1}\ndata: "
                     + json.dumps(
                         {
                             "type": "error",
-                            "code": "research_failed",
+                            "code": code,
                             "message": "Research could not complete. Please try again.",
                             "request_id": request.state.request_id,
                         }

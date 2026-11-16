@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from research_agent.config import Settings
 from research_agent.tools import wikipedia_query, wolfram_query
@@ -52,9 +53,17 @@ def extract_sources(value: Any) -> list[dict[str, str]]:
     if isinstance(value, dict):
         url = value.get("url")
         if isinstance(url, str):
-            parsed = urlparse(url)
-            if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username:
-                result.append({"url": url, "title": str(value.get("title") or parsed.hostname)})
+            hostname = ""
+            try:
+                parsed = urlparse(url)
+                hostname = parsed.hostname or ""
+                valid = (
+                    parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username
+                )
+            except ValueError:
+                valid = False
+            if valid:
+                result.append({"url": url, "title": str(value.get("title") or hostname)})
         for child in value.values():
             if isinstance(child, (dict, list)):
                 result.extend(extract_sources(child))
@@ -140,9 +149,12 @@ class LiveResearch:
         ):
             if mode == "messages":
                 message, _metadata = data
+                if not isinstance(message, (AIMessage, AIMessageChunk)):
+                    continue
                 for block in message.content_blocks:
-                    if block.get("type") == "text" and block.get("text"):
-                        yield {"type": "token", "text": block["text"]}
+                    text = block.get("text")
+                    if block.get("type") == "text" and isinstance(text, str) and text:
+                        yield {"type": "token", "text": text}
             elif mode == "updates":
                 for update in data.values():
                     if not isinstance(update, dict):

@@ -1,0 +1,22 @@
+# Informational estimates, not implemented spending controls. Checked 2026-11-15.
+# Verify prices and account access before enabling additional models.
+[[models]]
+id = "gpt-6-luna"
+label = "GPT-6 Luna"
+input_usd_per_mtok = "0.10"
+output_usd_per_mtok = "0.50"
+enabled = true
+
+[[models]]
+id = "gpt-6.1-terra"
+label = "GPT-6.1 Terra"
+input_usd_per_mtok = "1.00"
+output_usd_per_mtok = "5.00"
+enabled = false
+
+[[models]]
+id = "gpt-6.1-sol"
+label = "GPT-6.1 Sol"
+input_usd_per_mtok = "2.00"
+output_usd_per_mtok = "10.00"
+enabled = false

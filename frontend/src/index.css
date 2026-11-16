@@ -1,0 +1,8 @@
+:root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+body { margin: 0; }
+.markdown { overflow-wrap: anywhere; line-height: 1.75; }
+.markdown pre { overflow-x: auto; padding: 1rem; background: light-dark(#f1f4f6, #20282e); border-radius: 8px; }
+.markdown table { display: block; overflow-x: auto; border-collapse: collapse; }
+.markdown th, .markdown td { padding: .5rem; border: 1px solid #8886; }
+a { color: light-dark(#1a5f7a, #75cfed); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; } }

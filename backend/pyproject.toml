@@ -1,0 +1,51 @@
+[project]
+name = "research-agent"
+version = "0.1.0"
+description = "Streaming web-search research assistant"
+readme = "README.md"
+authors = [
+    { name = "Rich Guilmain", email = "richguilmain@gmail.com" }
+]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "pydantic-settings>=2.6,<3",
+    "httpx>=0.28,<1",
+    "langchain>=1,<2",
+    "langchain-openai>=1,<2",
+    "langchain-tavily>=0.2,<1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10", "pytest-asyncio>=1,<2", "pytest-cov>=6,<8",
+    "respx>=0.22,<1", "ruff>=0.14,<1", "pyright>=1.1,<2",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--cov=research_agent --cov-report=term-missing"
+
+[project.scripts]
+research-agent = "research_agent.main:run"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"

@@ -34,6 +34,10 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
+[tool.ruff.lint.isort]
+# An empty local migration directory must not change Alembic's import classification.
+known-third-party = ["alembic"]
+
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"

@@ -2,10 +2,10 @@
 
 import asyncio
 
+from alembic import context
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from alembic import context
 from research_agent.config import Settings
 from research_agent.storage_models import Base
 

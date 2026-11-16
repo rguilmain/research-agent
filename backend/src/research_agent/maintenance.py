@@ -3,9 +3,9 @@
 import asyncio
 from pathlib import Path
 
+from alembic import command
 from alembic.config import Config
 
-from alembic import command
 from research_agent.config import Settings
 from research_agent.db import Database, configure_event_loop
 from research_agent.repository import Repository

@@ -10,6 +10,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import respx
+from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from http_fixtures import responses_stream
@@ -18,7 +19,6 @@ from pydantic import SecretStr
 from sqlalchemy import select, text, update
 from sqlalchemy.engine import make_url
 
-from alembic import command
 from research_agent.config import Settings
 from research_agent.db import Database
 from research_agent.guards import RunContext

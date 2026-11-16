@@ -5,9 +5,8 @@ Revises: None
 """
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
-
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0001"
 down_revision = None

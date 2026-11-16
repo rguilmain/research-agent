@@ -30,7 +30,7 @@
   thread APIs, owner checks, retention cleanup. Serialize concurrent writes per thread.
   - [x] M3a: local/CI PostgreSQL, explicit packaged migrations, owner-scoped metadata APIs,
     durable run/usage records, checkpointed live turns, per-thread exclusion, manual cleanup.
-    Verified locally; CI wiring added but not run remotely. Production DB remains M9.
+    Verified locally and in CI run 43825899521 (b535d8e). Production DB remains M9.
   - [ ] M3b: history presentation/resume UX, retention scheduling and operational hardening.
     Interrupted threads intentionally require a new thread; no automatic tool replay.
 - [ ] M4: server-side GitHub OAuth (state, PKCE if supported), opaque hashed sessions,
@@ -51,12 +51,14 @@
 
 ## Next agent: begin here
 
-1. Run all AGENTS.md checks and inspect the CI run.
+1. M3a landed in 9cbb7fb with cross-platform lint fix b535d8e; CI run 43825899521 passed.
+   Run all AGENTS.md checks again before further implementation.
 2. M1b and non-durable M2b controls verified offline; live access/reasoning/pricing remain
    unverified. Do not spend provider credits without keys/approval.
-3. Introduce PostgreSQL and migrations before authentication or quotas.
-   M3a implementation is now in the working tree; verify recorded local checks below.
-4. Implement auth and budget controls together with adversarial/concurrency tests.
+3. PostgreSQL and migrations are implemented. Next candidate slices are M3b history/resume
+   UX and cleanup operations, or M4/M5 authentication and budget controls together with
+   adversarial/concurrency tests. Confirm scope before starting another milestone.
+4. Latest approved scope was only to land M3a and observe CI; stop after that handoff.
 5. Keep README truthful; a demo foundation is not a production-ready application.
 
 ## Access and model policy to implement
@@ -105,7 +107,29 @@ Tracing is opt-in because it can export private conversation content.
 
 ## External setup / blockers
 
+### M3a landing verification — November 16, 2026
+
+- Committed/pushed M3a as 9cbb7fb; reviewed all 32 staged paths, whitespace and credential
+  patterns. No secrets, generated output or unrelated project files were committed.
+- Initial CI run 43825663074 failed four Ruff import-order checks although Windows passed:
+  an empty local `backend/alembic` directory affected import classification. Explicitly
+  classified Alembic as third-party and normalized imports in b535d8e; no runtime changes.
+- CI run 43825899521 on b535d8e observed successful for backend, frontend and Docker smoke.
+  Logs confirm 90 backend tests (PostgreSQL tests executed, not skipped), 15 frontend tests,
+  image safety/packaged migration checks, HTTP health and complete demo SSE.
+- Repeated local locked sync, Ruff check/format, pyright and PostgreSQL suite passed
+  (90 tests, 93% coverage). Without a database: 76 passed / 14 skipped. npm ci, lint,
+  typecheck, 15 tests, build and production dependency audit passed (zero production findings).
+  Docker smoke and explicit production startup rejection also passed locally.
+- Existing seven moderate dev-only audit findings and >500 kB bundle warning remain.
+  A failed run admission can leave a newly created empty thread until retention cleanup;
+  no history UI or scheduled cleanup was added. Authentication, quotas, monetary reservations,
+  production infrastructure and launch acceptance tests remain blockers.
+- Scope ends with landing M3a. No live provider calls, paid infrastructure or deployment.
+
 ### M3a implementation — November 16, 2026
+
+Historical implementation-session notes below predate the landing verification above.
 
 - Added SQLAlchemy/Alembic, psycopg 3 and PostgreSQL checkpointer; refreshed `backend/uv.lock`
   without changing the existing LangGraph versions. Local PostgreSQL 17.7 compose service

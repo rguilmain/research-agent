@@ -61,6 +61,47 @@ async def test_tavily_failures_are_redacted(failure):
 
 
 @respx.mock
+async def test_wikipedia_success_trims_fields_and_results():
+    respx.get("https://en.wikipedia.org/w/api.php").respond(
+        200,
+        json={
+            "query": {
+                "pages": {
+                    str(i): {
+                        "title": "T" * 300,
+                        "fullurl": "https://en.wikipedia.org/wiki/Test",
+                        "extract": "x" * 5000,
+                    }
+                    for i in range(5)
+                }
+            }
+        },
+    )
+    async with httpx.AsyncClient() as client:
+        result = json.loads(await wikipedia_query(client, "q"))
+    assert len(result) == 3
+    assert len(result[0]["content"]) == 1000
+
+
+@pytest.mark.parametrize("provider", ["wikipedia", "wolfram"])
+@respx.mock
+async def test_all_tool_responses_have_byte_bounds(provider):
+    url = (
+        "https://en.wikipedia.org/w/api.php"
+        if provider == "wikipedia"
+        else "https://api.wolframalpha.com/v2/query"
+    )
+    respx.get(url).respond(200, content=b"x" * 256001)
+    async with httpx.AsyncClient() as client:
+        result = (
+            await wikipedia_query(client, "q")
+            if provider == "wikipedia"
+            else await wolfram_query(client, "SECRET", "q")
+        )
+    assert "unavailable" in result and "SECRET" not in result
+
+
+@respx.mock
 async def test_wolfram_result_and_secret_redaction():
     route = respx.get("https://api.wolframalpha.com/v2/query")
     route.respond(

@@ -44,6 +44,7 @@ addopts = "--cov=research_agent --cov-report=term-missing"
 
 [project.scripts]
 research-agent = "research_agent.main:run"
+research-agent-check-models = "research_agent.check_models:run"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

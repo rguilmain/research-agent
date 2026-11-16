@@ -126,6 +126,7 @@ class LiveResearch:
             timeout=45,
             max_retries=1,
             stream_usage=True,
+            http_async_client=self.client,
         )
         middleware: list[AgentMiddleware[Any, Any, Any]] = [
             ModelGuards(self.settings),
@@ -150,7 +151,8 @@ class LiveResearch:
         async for mode, data in self.agent(model_id).astream(
             {"messages": [{"role": "user", "content": query}]},
             stream_mode=["messages", "updates"],
-            config={"recursion_limit": self.settings.max_model_calls * 4},
+            # Middleware adds graph steps; model/tool admission limits remain authoritative.
+            config={"recursion_limit": self.settings.max_model_calls * 8 + 10},
             context=context,
         ):
             if mode == "messages":

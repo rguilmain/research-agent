@@ -17,7 +17,22 @@ The SSE lifecycle holds one provider read in flight, emits heartbeats without ca
 that read, polls disconnects during silence, and explicitly closes the source on timeout,
 terminal events, or cancellation. Per-response event IDs support diagnostics only, not
 replay/resumption. Only assistant text blocks are emitted, not tool text or reasoning.
-Synthetic LangChain messages test the adapter; provider wire-format integration remains.
+Synthetic LangChain messages and synthetic Responses SSE/Tavily HTTP fixtures test the
+adapter through the actual OpenAI SDK and create_agent loop. These are NOT captured live
+traffic and do not establish model/account availability or live reasoning compatibility.
+
+RunContext is created for every run and passed explicitly through LangGraph runtime;
+cached agents/middleware retain no mutable per-run state. Tool guards reject duplicate,
+invalid and oversized queries before HTTP, cap concurrency and retain only whole JSON
+evidence entries within the output cap. Every tool bounds decoded response bytes.
+Model guards check full system/message/tool context plus output allowance before every
+call, and accumulate conservative input estimates or larger observed usage across calls.
+Final-message usage is counted once, never from streamed chunks/updates; cached input and
+reasoning are subsets. Missing usage is flagged and estimated conservatively. Failed or
+cancelled runs do not yet persist partial usage/reservations; durable recovery is M3/M5.
+SDK retries remain bounded to one; future budget reservations must cover both attempts.
+Strict Pydantic SSE payload validation and corresponding browser runtime checks reject
+unknown fields/types/tools, unsafe source URLs, invalid usage totals and oversized frames.
 
 No persistence, authentication, cost enforcement, or public deployment exists yet.
 APP_ENV=production fails validation intentionally. Demo mode is not an auth bypass
@@ -48,8 +63,9 @@ Cloudflare Turnstile protects anonymous admission, not authorization.
 
 ## Known dependency warning
 
-The initial npm audit reports a moderate dev-only minimatch glob-amplification
-advisory through typescript-eslint. Production dependency audit is clean. Do not
+The 2026-11-16 npm audit reports seven moderate findings across the dev-only minimatch /
+typescript-eslint chain (not seven distinct root advisories). Production dependency audit
+is clean (zero findings with --omit=dev). Do not
 apply npm's suggested incompatible downgrade or force a major minimatch override
 without tests; upgrade the upstream lint dependency when its supported fix lands.
 The browser bundle also exceeds Vite's default 500 kB warning; lazy-load Markdown

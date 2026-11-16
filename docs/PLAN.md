@@ -13,16 +13,19 @@
 
 - [x] M0: initialize local repo, Python/React scaffolds, lockfiles, license, agent instructions.
 - [x] M1a: settings, model catalog, async tools, create_agent construction, offline tests.
-- [ ] M1b: fake-model tool-loop tests, mocked Responses/Tavily integration, bounded parallelism,
+- [x] M1b: fake-model tool-loop tests, mocked Responses/Tavily integration, bounded parallelism,
   duplicate-call prevention, per-tool input/output limits, account-access check command.
+  Verified using actual SDK/create_agent loops with synthetic HTTP fixtures (stronger
+  than fake-model-only tests). Access-check command verified with mocked HTTP only.
 - [x] M2a: streaming API and UI, cancellation control, safe Markdown and structured sources.
 - [ ] M2b: verified provider-stream adapter tests, disconnect and timeout tests, heartbeat,
   runtime event validation, stable event ids, run state, input/context limits, usage accounting.
   Completed subset: heartbeat, per-response event IDs (not replay/resume), silent-provider
   disconnect polling, timeout/cancellation cleanup, unexpected-EOF detection, concurrent-run
   tests, and synthetic LangChain message-adapter tests excluding tool/reasoning text.
-  Still required: actual mocked Responses/Tavily wire streams, schema validation,
-  usage accounting, context bounds, and durable run state.
+  Also verified: synthetic Responses/Tavily wire streams through the actual SDK/agent,
+  runtime schema validation on server/browser, aggregate usage and per-call/cumulative
+  context bounds. Still required: durable run state and partial-usage crash recovery (M3/M5).
 - [ ] M3: PostgreSQL (dev/CI/prod), SQLAlchemy + Alembic, LangGraph checkpointer,
   thread APIs, owner checks, retention cleanup. Serialize concurrent writes per thread.
 - [ ] M4: server-side GitHub OAuth (state, PKCE if supported), opaque hashed sessions,
@@ -44,7 +47,8 @@
 ## Next agent: begin here
 
 1. Run all AGENTS.md checks and inspect the CI run.
-2. Finish M1b/M2b using mocked HTTP; do not spend provider credits without keys/approval.
+2. M1b and non-durable M2b controls verified offline; live access/reasoning/pricing remain
+   unverified. Do not spend provider credits without keys/approval.
 3. Introduce PostgreSQL and migrations before authentication or quotas.
 4. Implement auth and budget controls together with adversarial/concurrency tests.
 5. Keep README truthful; a demo foundation is not a production-ready application.
@@ -73,7 +77,7 @@ Planned: GET /api/v1/me; GET/POST /api/v1/threads; GET/PATCH/DELETE
 POST /auth/logout. OAuth callback should be on the same public origin.
 
 SSE: run_started, step, token, sources, usage, quota, done, error. Current implementation
-supports the first four plus done/error. Never stream raw chain-of-thought or secret
+supports these except quota. Never stream raw chain-of-thought or secret
 tool arguments. Frontend must treat EOF without done as failure.
 
 ## Security launch gates
@@ -126,6 +130,23 @@ Tracing is opt-in because it can export private conversation content.
 - Strict runtime event schemas added at the SSE boundary and browser parser, including
   usage subset invariants, URL safety, known tools/statuses and payload bounds. Malformed
   service output becomes a redacted error. Local tests: 51 backend, 10 frontend passed.
+- Event validation CI 43810292983 (0b4c18f) passed including Docker smoke.
+- Synthetic HTTP loop tests verify full Responses tool-call/answer streams, Tavily
+  response trimming, parallel/cross-turn duplicates, context rejection on later calls,
+  model-call bounds, hidden reasoning, missing usage and redacted failures with a bounded
+  retry. Found/fixed recursion-limit overhead introduced by middleware (MAX_MODEL_CALLS=1).
+- Read-only model-visibility command implemented and tested offline; does not establish
+  generation/reasoning access or pricing, and never enables models. No live probe run.
+- Remaining known limits: context estimates are not billing guarantees; retries are not
+  separately counted as logical model calls; failed/cancelled usage is not durable yet.
+  Production remains blocked. Next substantive milestone is M3, not authentication/quotas.
+- Rebuilt development Docker image locally after adapter/guard changes: non-root UID,
+  packaged catalog, absence of /app .env, health and complete demo stream all passed.
+  npm audit --omit=dev: zero findings; full audit: seven moderate findings on the existing
+  dev-only minimatch/typescript-eslint chain. No forced dependency changes made.
+- Final implementation checks observed locally: uv sync --locked, ruff check/format,
+  pyright, 66 backend tests (96% coverage); npm ci/lint/typecheck, 10 frontend tests,
+  build all passed. Known >500 kB bundle warning remains. Final implementation CI pending.
 
 - User is preparing fresh OpenAI/Tavily/Wolfram keys, dev/prod GitHub OAuth Apps,
   and Cloudflare Turnstile. Never copy rag-app's .env.

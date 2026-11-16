@@ -71,14 +71,17 @@ async def tavily_query(client: httpx.AsyncClient, api_key: str, query: str) -> s
 
 async def wolfram_query(client: httpx.AsyncClient, app_id: str, query: str) -> str:
     try:
-        response = await client.get(
+        data = await bounded_json(
+            client,
+            "GET",
             "https://api.wolframalpha.com/v2/query",
             params={"appid": app_id, "input": query, "output": "json", "format": "plaintext"},
             headers={"User-Agent": "research-agent/0.1 (wolfram-alpha tool)"},
             timeout=30,
         )
-        response.raise_for_status()
-        result = response.json().get("queryresult", {})
+        if not isinstance(data, dict):
+            raise ValueError("Invalid computation response")
+        result = data.get("queryresult", {})
         if not result.get("success"):
             return "Wolfram Alpha could not answer that query."
         pods = result.get("pods", [])
@@ -88,7 +91,7 @@ async def wolfram_query(client: httpx.AsyncClient, app_id: str, query: str) -> s
             for subpod in pod.get("subpods", []):
                 text = (subpod.get("plaintext") or "").strip()
                 if text:
-                    return text[:8000]
+                    return text[:6000]
         return "Wolfram Alpha returned no usable result."
     except httpx.HTTPStatusError as exc:
         return f"Wolfram Alpha returned HTTP {exc.response.status_code}."
@@ -98,10 +101,10 @@ async def wolfram_query(client: httpx.AsyncClient, app_id: str, query: str) -> s
 
 async def wikipedia_query(client: httpx.AsyncClient, query: str) -> str:
     """Search Wikipedia's fixed API endpoint; do not fetch model-supplied URLs."""
-    import json
-
     try:
-        response = await client.get(
+        data = await bounded_json(
+            client,
+            "GET",
             "https://en.wikipedia.org/w/api.php",
             params={
                 "action": "query",
@@ -117,16 +120,18 @@ async def wikipedia_query(client: httpx.AsyncClient, query: str) -> str:
             headers={"User-Agent": "research-agent/0.1 (web research; local development)"},
             timeout=20,
         )
-        response.raise_for_status()
-        pages = response.json().get("query", {}).get("pages", {})
+        if not isinstance(data, dict):
+            raise ValueError("Invalid Wikipedia response")
+        pages = data.get("query", {}).get("pages", {})
         return json.dumps(
             [
                 {
-                    "title": p.get("title"),
+                    "title": str(p.get("title") or "Wikipedia")[:200],
                     "url": p.get("fullurl"),
-                    "content": p.get("extract", "")[:3000],
+                    "content": str(p.get("extract") or "")[:1000],
                 }
-                for p in pages.values()
+                for p in list(pages.values())[:3]
+                if isinstance(p, dict) and safe_url(p.get("fullurl"))
             ]
         )
     except (httpx.HTTPError, ValueError, AttributeError, TypeError):

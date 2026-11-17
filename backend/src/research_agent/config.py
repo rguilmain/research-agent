@@ -15,7 +15,18 @@ logger = logging.getLogger(__name__)
 # Production readiness rejects an unset SESSION_SECRET, so this key never ships.
 EPHEMERAL_SESSION_KEY = secrets.token_bytes(32)
 MIN_SESSION_SECRET_LENGTH = 32
+MAX_TURNSTILE_VERIFIED_MINUTES = 60
 _ephemeral_warned = False
+
+# Cloudflare's public always-pass/always-fail/already-spent keys, documented for local testing.
+# They prove nothing, so production readiness rejects them.
+TURNSTILE_TEST_SECRETS = frozenset(
+    {
+        "1x0000000000000000000000000000000AA",
+        "2x0000000000000000000000000000000AA",
+        "3x0000000000000000000000000000000AA",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -54,10 +65,19 @@ class Settings(BaseSettings):
     rate_limit_login_per_hour: int = 10
     quota_anon_daily: int = 3
     quota_user_daily: int = 25
+    turnstile_site_key: str = ""
+    turnstile_secret_key: SecretStr = SecretStr("")
+    turnstile_verified_minutes: int = 60
+    rate_limit_turnstile_per_hour: int = 30
 
     @property
     def login_enabled(self) -> bool:
         return bool(self.github_client_id and self.github_client_secret.get_secret_value())
+
+    @property
+    def turnstile_enabled(self) -> bool:
+        """Anonymous admission is protected only when both keys are configured."""
+        return bool(self.turnstile_site_key and self.turnstile_secret_key.get_secret_value())
 
     @property
     def secure_cookies(self) -> bool:
@@ -145,12 +165,21 @@ class Settings(BaseSettings):
                 self.rate_limit_anon_session_per_hour,
                 self.rate_limit_research_per_hour,
                 self.rate_limit_login_per_hour,
+                self.rate_limit_turnstile_per_hour,
             )
             <= 0
         ):
             raise ValueError("Rate limits must be positive")
         if min(self.quota_anon_daily, self.quota_user_daily) <= 0:
             raise ValueError("Daily quotas must be positive")
+        site = bool(self.turnstile_site_key)
+        secret = bool(self.turnstile_secret_key.get_secret_value())
+        if site != secret:
+            raise ValueError("TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY must be set together")
+        if not 1 <= self.turnstile_verified_minutes <= MAX_TURNSTILE_VERIFIED_MINUTES:
+            raise ValueError(
+                f"TURNSTILE_VERIFIED_MINUTES must be between 1 and {MAX_TURNSTILE_VERIFIED_MINUTES}"
+            )
         return self
 
 
@@ -169,4 +198,8 @@ def production_readiness_errors(settings: Settings) -> list[str]:
         errors.append("SESSION_SECRET is not configured")
     if not settings.secure_cookies:
         errors.append("PUBLIC_BASE_URL must use https for production cookies")
+    if not settings.turnstile_enabled:
+        errors.append("TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are not configured")
+    elif settings.turnstile_secret_key.get_secret_value() in TURNSTILE_TEST_SECRETS:
+        errors.append("TURNSTILE_SECRET_KEY is a Cloudflare test key")
     return errors

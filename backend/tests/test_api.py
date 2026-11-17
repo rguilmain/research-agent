@@ -91,4 +91,6 @@ def test_me_reports_anonymous_identity_without_database(client):
         "user": None,
         "csrf_token": None,
         "login_enabled": False,
+        "turnstile_required": False,
+        "human_verified_until": None,
     }

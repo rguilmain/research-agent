@@ -11,6 +11,7 @@ export function useResearch() {
   const [busy, setBusy] = useState(false)
   const [steps, setSteps] = useState<string[]>([])
   const [quota, setQuota] = useState<{ limit: number; remaining: number } | null>(null)
+  const [failureCode, setFailureCode] = useState<string | undefined>(undefined)
   const [activeThread, setActiveThread] = useState<{ id: string; model: string } | null>(null)
   const [canContinue, setCanContinue] = useState(true)
   const [notice, setNotice] = useState('')
@@ -66,6 +67,7 @@ export function useResearch() {
     setError('')
     setSteps([])
     setNotice('')
+    setFailureCode(undefined)
     const continuing = thread.current?.model === model_id
     setTurns(value => [...(continuing ? value : []), { role: 'user', text: query, sources: [] },
       { role: 'assistant', text: '', sources: [] }])
@@ -78,7 +80,9 @@ export function useResearch() {
           ...(continuing ? { thread_id: thread.current!.id } : {}) }), signal: abort.signal,
       })
       if (!response.ok || !response.body) {
-        throw new Error(describeFailure(response.status, response.ok ? undefined : await problemCode(response)))
+        const code = response.ok ? undefined : await problemCode(response)
+        setFailureCode(code)
+        throw new Error(describeFailure(response.status, code))
       }
       let completed = false
       for await (const event of readEvents(response.body)) {
@@ -109,6 +113,6 @@ export function useResearch() {
   }
   const last = turns.at(-1)
   return { turns, answer: last?.role === 'assistant' ? last.text : '', sources: last?.sources ?? [],
-    error, busy, steps, quota, research, reset, openThread, activeThread, canContinue, notice,
-    historyVersion, stop: () => { controller.current?.abort() } }
+    error, busy, steps, quota, failureCode, research, reset, openThread, activeThread, canContinue,
+    notice, historyVersion, stop: () => { controller.current?.abort() } }
 }

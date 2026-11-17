@@ -64,7 +64,12 @@ without a database is not limited. Anonymous callers get `QUOTA_ANON_DAILY` weig
 per UTC day and may use only Luna; signed-in callers get `QUOTA_USER_DAILY` (weights come
 from the catalog: Luna 1, Terra 3, Sol 5). Over-quota requests get 429 with
 `code: quota_exceeded`, and each accepted run reports the remaining allowance in a `quota`
-event. Turnstile and budget reservations are not
+event. Anonymous callers must also pass Cloudflare Turnstile: set `TURNSTILE_SITE_KEY` and
+`TURNSTILE_SECRET_KEY` in `backend/.env` (Cloudflare's public always-pass test keys are
+`1x00000000000000000000AA` and `1x0000000000000000000000000000000AA`) and the page shows one
+widget instead of the question form until the check passes. Verification lasts
+`TURNSTILE_VERIFIED_MINUTES` (default and maximum 60) per session; signed-in callers are never
+challenged. Budget reservations are not
 implemented, so still do not expose this application to other users. Real prompts,
 assistant/tool messages
 and agent state are persisted for live conversations; demo output is never checkpointed.
@@ -102,13 +107,15 @@ Do not enable expensive models before the budget-reservation milestone.
   plus per-principal and per-address research starts, refused early with 429 and `Retry-After`.
 - Daily weighted question quotas per session, per hashed address and per principal, charged
   only when they fit, refunded when admission fails, and reported in a `quota` stream event.
+- Cloudflare Turnstile human verification for anonymous callers, validated server-side with
+  fail-closed handling and a bounded per-session window (signed-in users are not challenged).
 
 ## Planned launch features
 
 Hybrid access: anonymous users pass Turnstile and get a small daily quota; GitHub
 users get more quota and saved-history browsing. PostgreSQL already stores development
-threads and runs, development sessions/GitHub sign-in exist, shared rate limits and daily
-quotas are implemented; Turnstile and atomic cost reservations are **not implemented**.
+threads and runs, development sessions/GitHub sign-in exist, and shared rate limits, daily
+quotas and Turnstile are implemented; atomic cost reservations are **not implemented**.
 Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
 ## Checks

@@ -77,6 +77,8 @@ class AuthSession(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set after a successful Turnstile check; never persisted for signed-in principals.
+    human_verified_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OAuthState(Base):

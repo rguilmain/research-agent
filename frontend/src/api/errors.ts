@@ -9,8 +9,17 @@ export class ApiError extends Error {
 
 /** User-facing text for a failed response; 429 means admission control refused us. */
 export function describeFailure(status: number, code?: string): string {
-  if (code === 'quota_exceeded') {
-    return 'Daily question limit reached. Sign in for a larger allowance, or try again tomorrow.'
+  switch (code) {
+    case 'quota_exceeded':
+      return 'Daily question limit reached. Sign in for a larger allowance, or try again tomorrow.'
+    case 'turnstile_required':
+      return 'Please confirm you are human, then ask again.'
+    case 'turnstile_failed':
+      return 'Human check failed. Please try again.'
+    case 'turnstile_unavailable':
+      return 'Human verification is temporarily unavailable. Please try again shortly.'
+    default:
+      break
   }
   return status === 429
     ? 'Too many requests. Please try again in a moment.'

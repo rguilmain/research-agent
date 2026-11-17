@@ -6,6 +6,8 @@ export type Me = {
   user: User | null
   csrf_token: string | null
   login_enabled: boolean
+  turnstile_required: boolean
+  human_verified_until: string | null
 }
 
 const record = (v: unknown): v is Record<string, unknown> =>
@@ -24,12 +26,17 @@ const avatar = (v: unknown): v is string | null => {
     return false
   }
 }
+/** The verification window is an ISO timestamp the server issued, not a client value. */
+const verifiedUntil = (v: unknown): v is string | null =>
+  v === null || (text(v, 64) && !Number.isNaN(Date.parse(v)))
 
 export function validateMe(value: unknown): Me {
   if (
     !record(value) ||
     !['anonymous', 'user', 'none'].includes(String(value.kind)) ||
     typeof value.login_enabled !== 'boolean' ||
+    typeof value.turnstile_required !== 'boolean' ||
+    !verifiedUntil(value.human_verified_until) ||
     (value.csrf_token !== null && !text(value.csrf_token, 200))
   ) {
     throw new Error('Invalid identity response')
@@ -48,6 +55,8 @@ export function validateMe(value: unknown): Me {
     user,
     csrf_token: value.csrf_token,
     login_enabled: value.login_enabled,
+    turnstile_required: value.turnstile_required,
+    human_verified_until: value.human_verified_until,
   }
 }
 

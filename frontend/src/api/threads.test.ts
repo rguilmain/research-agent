@@ -57,7 +57,8 @@ describe('thread API', () => {
   })
 
   it('sends the session CSRF token on unsafe methods only', async () => {
-    const me = { kind: 'anonymous', user: null, csrf_token: 'csrf-value', login_enabled: false }
+    const me = { kind: 'anonymous', user: null, csrf_token: 'csrf-value', login_enabled: false,
+      turnstile_required: false, human_verified_until: null }
     const fetch = vi.fn().mockImplementation((url: string) => {
       const body = url === '/api/v1/me' ? me : url.includes('?') ? { items: [thread] } : thread
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))

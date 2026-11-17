@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 
 from research_agent import __version__, quota, ratelimit
-from research_agent.auth import AuthContext, AuthError, require_csrf
+from research_agent.auth import AuthContext, AuthError, human_verified, require_csrf
 from research_agent.auth_api import router as auth_router
 from research_agent.catalog import load_catalog
 from research_agent.config import Settings
@@ -31,6 +31,7 @@ from research_agent.repository import Conflict, NotFound, Repository
 from research_agent.research import DemoResearch, LiveResearch, ResearchService
 from research_agent.streaming import stream_events
 from research_agent.threads_api import router as threads_router
+from research_agent.turnstile import TurnstileRequired
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,10 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
             media_type="application/problem+json",
         )
 
+    @app.exception_handler(TurnstileRequired)
+    async def turnstile_required(request: Request, _exc: TurnstileRequired):
+        return problem(request, 403, "turnstile_required", "Human verification required")
+
     @app.exception_handler(NotFound)
     async def not_found(_request, _exc):
         return JSONResponse(status_code=404, content={"detail": "Thread not found"})
@@ -182,6 +187,8 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
             "demo": config.demo_mode,
             "login_enabled": config.login_enabled,
             "version": __version__,
+            # The site key is public by design; the secret key is never exposed.
+            "turnstile_site_key": config.turnstile_site_key or None,
         }
 
     @app.get("/api/v1/models")
@@ -217,6 +224,13 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
         if repo:
             # Admission control runs before any row is created, so a refused request
             # never leaves a thread or an active run behind.
+            if (
+                config.turnstile_enabled
+                and session.kind == "anonymous"
+                and not human_verified(session)
+            ):
+                # Checked before rate limits and quota so an unverified client consumes nothing.
+                raise TurnstileRequired()
             secret = config.session_secret_bytes()
             await ratelimit.enforce(
                 repo,

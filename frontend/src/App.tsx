@@ -6,6 +6,7 @@ import { ApiError, describeFailure } from './api/errors'
 import { ensureIdentity, loadIdentity, loginUrl, signOut } from './api/session'
 import type { Me } from './api/session'
 import ThreadHistory from './components/ThreadHistory'
+import HumanCheck from './components/HumanCheck'
 import { useResearch } from './hooks/useResearch'
 
 const MarkdownView = lazy(() => import('./components/MarkdownView'))
@@ -27,11 +28,13 @@ export default function App() {
   const [demo, setDemo] = useState<boolean | null>(null)
   const [identity, setIdentity] = useState<Me | null>(null)
   const [identityError, setIdentityError] = useState('')
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null)
   const [authError, setAuthError] = useState(
     () => new URLSearchParams(window.location.search).get('auth_error') === '1')
-  const { turns, error, busy, steps, quota, research, stop, reset, openThread, activeThread,
-    canContinue, notice, historyVersion } = useResearch()
+  const { turns, error, busy, steps, quota, failureCode, research, stop, reset, openThread,
+    activeThread, canContinue, notice, historyVersion } = useResearch()
   const selectedModel = activeThread?.model ?? model
+  const needsHumanCheck = !!turnstileSiteKey && identity?.turnstile_required === true
 
   useEffect(() => {
     const abort = new AbortController()
@@ -46,6 +49,7 @@ export default function App() {
         setCatalog(models)
         setModel(models.default)
         setDemo(config.demo)
+        setTurnstileSiteKey(typeof config.turnstile_site_key === 'string' ? config.turnstile_site_key : null)
       } catch {
         if (!abort.signal.aborted) setConnectionError('Cannot reach the backend. Start the API on port 8000.')
       }
@@ -64,9 +68,16 @@ export default function App() {
     return () => abort.abort()
   }, [])
 
+  // The verification window can expire while the page is open; refetch so the widget returns.
+  useEffect(() => {
+    if (failureCode !== 'turnstile_required') return
+    void loadIdentity().then(value => { setIdentity(value); setIdentityError('') })
+      .catch(() => setIdentity(null))
+  }, [failureCode])
+
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (!query.trim() || !selectedModel) return
+    if (!query.trim() || !selectedModel || needsHumanCheck) return
     // Close the mount race: an unsafe request needs the session's CSRF token.
     try { await ensureIdentity() } catch { /* the request surfaces the failure itself */ }
     void research(query.trim(), selectedModel)
@@ -104,7 +115,7 @@ export default function App() {
             <Button size="small" variant="outlined" href={loginUrl('/')}>Sign in with GitHub</Button> :
             <Chip label="Development" variant="outlined" />}
       </Stack>
-      <Alert severity="warning" sx={{ mb: 3 }}>Not ready for public deployment. Per-user quotas and abuse protection are not implemented.</Alert>
+      <Alert severity="warning" sx={{ mb: 3 }}>Not ready for public deployment. Budget limits and scheduled cleanup are not implemented.</Alert>
       {demo === true && <Alert severity="info" sx={{ mb: 3 }}>Demo mode — no paid APIs or real web searches.</Alert>}
       {authError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setAuthError(false)}>
         GitHub sign-in did not complete. Please try again.</Alert>}
@@ -112,6 +123,8 @@ export default function App() {
       {connectionError && <Alert severity="error">{connectionError}</Alert>}
       {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
       {!canContinue && <Button disabled={busy} onClick={() => { reset(); setQuery('') }}>Start a new thread</Button>}
+      {needsHumanCheck && <HumanCheck siteKey={turnstileSiteKey!}
+        onVerified={() => { void loadIdentity().then(setIdentity).catch(() => setIdentity(null)) }} />}
       {canContinue && <Paper component="form" onSubmit={submit} variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
         <TextField fullWidth multiline minRows={3} maxRows={8} label="What would you like to research?"
           value={query} onChange={event => setQuery(event.target.value)}
@@ -129,7 +142,7 @@ export default function App() {
             </Select>
           </FormControl>
           {busy ? <Button variant="outlined" onClick={stop}>Stop</Button> :
-            <Button type="submit" variant="contained" disabled={!query.trim() || !selectedModel}>Research</Button>}
+            <Button type="submit" variant="contained" disabled={!query.trim() || !selectedModel || needsHumanCheck}>Research</Button>}
           <Button disabled={busy} onClick={() => { reset(); setQuery('') }}>New thread</Button>
         </Stack>
       </Paper>}

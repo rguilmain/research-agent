@@ -10,6 +10,7 @@ import hmac
 import re
 import secrets
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -52,6 +53,8 @@ class AuthContext:
     csrf_token: str | None = None
     login: str | None = None
     avatar_url: str | None = None
+    # Set only for anonymous sessions that recently passed a Turnstile check.
+    human_verified_until: datetime | None = None
     # True only when this request created the session, so only ``/me`` sets a cookie.
     created: bool = False
 
@@ -176,7 +179,14 @@ def _context_from(record: SessionRecord, secret: bytes, token: str | None) -> Au
         csrf_token=csrf_token(secret, record.token_hash),
         login=record.login,
         avatar_url=record.avatar_url,
+        human_verified_until=record.human_verified_until,
     )
+
+
+def human_verified(context: AuthContext) -> bool:
+    """True while a session's recorded Turnstile window is still in the future."""
+    until = context.human_verified_until
+    return until is not None and until > datetime.now(UTC)
 
 
 async def _resolve(request: Request) -> AuthContext | None:

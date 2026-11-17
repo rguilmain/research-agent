@@ -106,7 +106,7 @@ otherwise the rightmost `X-Forwarded-For` hop, the only entry a client cannot fo
 single trusted ingress. That assumption must be re-verified against the real Fly ingress in
 M9. A process without a database is not limited, which is development-only behavior. Known
 limits: fixed windows allow a brief boundary burst and address limits do not stop distributed
-abuse; Turnstile and monetary reservations remain M5.
+abuse; monetary reservations remain M5.
 
 Daily quotas (M5b-1): `quota_usage` holds one weighted-unit counter per scope, HMAC key and
 UTC day. A conditional upsert (`... WHERE units + n <= limit RETURNING units`) adds units
@@ -119,7 +119,21 @@ a request refused during admission is refunded, but a run that fails after admis
 Refusals return 429 `problem+json` (`code: quota_exceeded`) with `Retry-After` in seconds until
 the next UTC midnight, and an accepted run emits a bounded `quota` SSE event reporting the
 remaining allowance. This is a policy limiter, not a monetary reservation; the global daily
-budget with atomic reservations, Turnstile and concurrency caps remain M5.
+budget with atomic reservations and concurrency caps remain M5.
+
+Human verification (M5b-2): `auth_sessions.human_verified_until` records a successful
+Turnstile check on an anonymous session. Anonymous research is refused with 403
+`turnstile_required` before any rate limit or quota is charged, so an unverified client
+consumes nothing; signed-in callers are never challenged, and Turnstile is disabled
+entirely unless both keys are configured. `POST /api/v1/turnstile/verify` validates the
+token against Cloudflare's fixed siteverify endpoint with a bounded response, a ten-second
+timeout and at most one retry reusing the same idempotency key. A refusal, a wrong hostname
+or action, a timeout, or a malformed/oversized body all fail closed. With Cloudflare's
+documented test secrets the hostname is always `example.com` and no action is returned, so
+those two checks apply only to a real secret, and production readiness rejects test secrets.
+The window lasts `TURNSTILE_VERIFIED_MINUTES` (maximum 60) and is capped at the session
+expiry. No Content-Security-Policy is set yet; a future CSP (M7) must allow
+`https://challenges.cloudflare.com` in `script-src` and `frame-src`.
 Threads fix their model and demo/live mode at creation. Demo run metadata is explicitly
 marked, but demo answers are never checkpointed. GET thread returns metadata only, not
 raw checkpoint state, reasoning or tool arguments. GET /threads/{id}/messages projects a

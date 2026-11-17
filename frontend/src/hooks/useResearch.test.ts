@@ -75,7 +75,8 @@ describe('thread continuity', () => {
   })
 
   it('sends the session CSRF token with the research request', async () => {
-    const me = { kind: 'anonymous', user: null, csrf_token: 'csrf-value', login_enabled: false }
+    const me = { kind: 'anonymous', user: null, csrf_token: 'csrf-value', login_enabled: false,
+      turnstile_required: false, human_verified_until: null }
     const fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(me), { status: 200 }))
       .mockResolvedValueOnce(response([{ type: 'done' }]))
@@ -119,5 +120,15 @@ describe('thread continuity', () => {
     const { result } = renderHook(() => useResearch())
     await act(async () => { await result.current.research('question', 'model-a') })
     await waitFor(() => expect(result.current.error).toContain('Daily question limit reached'))
+  })
+
+  it('exposes the turnstile refusal code so the app can show the human check', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ type: 'about:blank', title: 'Human verification required', status: 403,
+        code: 'turnstile_required', request_id: 'r' }), { status: 403 })))
+    const { result } = renderHook(() => useResearch())
+    await act(async () => { await result.current.research('question', 'model-a') })
+    await waitFor(() => expect(result.current.failureCode).toBe('turnstile_required'))
+    expect(result.current.error).toContain('confirm you are human')
   })
 })

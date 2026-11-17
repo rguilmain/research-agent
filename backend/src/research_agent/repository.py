@@ -45,6 +45,7 @@ class SessionRecord:
     expires_at: datetime
     login: str | None = None
     avatar_url: str | None = None
+    human_verified_until: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -509,7 +510,30 @@ class Repository:
                 expires_at=row.expires_at,
                 login=login,
                 avatar_url=avatar_url,
+                human_verified_until=row.human_verified_until,
             )
+
+    async def mark_human_verified(self, token_hash: str, until: datetime) -> bool:
+        """Record a successful Turnstile check on a live anonymous session only.
+
+        The stored window never outlives the session itself. Returns False when the session
+        is missing, revoked, expired, or belongs to a signed-in principal.
+        """
+        async with self.db.sessions.begin() as session:
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(
+                    update(AuthSession)
+                    .where(
+                        AuthSession.token_hash == token_hash,
+                        AuthSession.kind == "anonymous",
+                        AuthSession.revoked_at.is_(None),
+                        AuthSession.expires_at > now(),
+                    )
+                    .values(human_verified_until=func.least(until, AuthSession.expires_at))
+                ),
+            )
+            return (result.rowcount or 0) == 1
 
     async def revoke_session(self, token_hash: str) -> None:
         async with self.db.sessions.begin() as session:

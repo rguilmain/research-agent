@@ -3,9 +3,10 @@ import { ApiError } from './errors'
 import { cachedIdentity, csrfHeaders, ensureIdentity, loadIdentity, loginUrl, resetIdentity,
   signOut, validateMe } from './session'
 
-const anonymous = { kind: 'anonymous', user: null, csrf_token: 'csrf-value', login_enabled: true }
+const anonymous = { kind: 'anonymous', user: null, csrf_token: 'csrf-value', login_enabled: true,
+  turnstile_required: false, human_verified_until: null }
 const signedIn = { kind: 'user', user: { login: 'octocat', avatar_url: 'https://avatars.example/o.png' },
-  csrf_token: 'csrf-user', login_enabled: true }
+  csrf_token: 'csrf-user', login_enabled: true, turnstile_required: false, human_verified_until: null }
 
 afterEach(() => { vi.unstubAllGlobals(); resetIdentity() })
 
@@ -33,6 +34,13 @@ describe('identity API', () => {
       user: { login: 'octocat', avatar_url: 'javascript:alert(1)' } })).toThrow()
     expect(() => validateMe({ ...signedIn,
       user: { login: 'octocat', avatar_url: 'http://insecure.example/a.png' } })).toThrow()
+    expect(() => validateMe({ ...anonymous, turnstile_required: 'yes' })).toThrow()
+    expect(() => validateMe({ ...anonymous, human_verified_until: 'not-a-date' })).toThrow()
+  })
+
+  it('accepts a recorded human-verification window', () => {
+    const verified = { ...anonymous, human_verified_until: '2026-11-17T16:00:00+00:00' }
+    expect(validateMe(verified)).toEqual(verified)
   })
 
   it('loads /api/v1/me and exposes the CSRF token to unsafe calls', async () => {

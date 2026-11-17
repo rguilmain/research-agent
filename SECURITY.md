@@ -1,8 +1,8 @@
 # Security
 
 Under active construction; **not ready for public deployment**.
-Production startup is intentionally blocked until persistent quotas, Turnstile admission,
-budget reservations, abuse limits and launch security acceptance tests are complete.
+Production startup is intentionally blocked until budget reservations, remaining abuse
+limits, scheduled cleanup and launch security acceptance tests are complete.
 
 Identity (M4a, development only): GitHub OAuth with state and PKCE, opaque session tokens
 stored only as HMAC hashes, HttpOnly SameSite=Lax cookies (`__Host-` and Secure over

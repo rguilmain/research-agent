@@ -24,6 +24,7 @@ ANON_SESSION = "anon_session"
 RESEARCH_SESSION = "research_session"
 RESEARCH_IP = "research_ip"
 LOGIN_IP = "login_ip"
+TURNSTILE_IP = "turnstile_ip"
 
 
 class CounterStore(Protocol):

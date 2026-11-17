@@ -43,8 +43,9 @@
     `44181979216` observed successful (backend with REQUIRE_PG=1, frontend, Docker smoke).
     The local PostgreSQL suite and Docker smoke had already passed locally; a real GitHub
     OAuth round trip has never been performed. See the M4a session notes.
-- [ ] M5: Turnstile server validation, hashed-IP and cookie quotas, per-user quotas,
-  shared SQL rate limits and concurrency limits, global budget reservations and settlement.
+- [ ] M5: abuse protection and cost control. Done: shared SQL rate limits (M5a), daily
+  weighted quotas (M5b-1) and Turnstile human verification (M5b-2). Open: shared concurrency
+  caps, global budget reservations and settlement (M5c).
   - [x] M5a: shared PostgreSQL fixed-window admission limits keyed by hashed client address,
     session principal and login start, returning 429 problem JSON with `Retry-After` before
     any row is created. Landed as commit `5eca4cb`; CI run `44187038198` observed successful
@@ -57,8 +58,9 @@
       address; a request refused during admission is refunded.
     - Not covered: no refund when a run fails after admission, reset is UTC midnight, and a
       demo process with a database also charges quota.
-  - [ ] M5b-2: Cloudflare Turnstile server validation with the browser widget and a bounded
-    "verified human" window for anonymous admission.
+  - [x] M5b-2: Cloudflare Turnstile server validation with the browser widget and a bounded
+    "verified human" window stored on the anonymous session. Verified offline with respx and
+    the documented public test keys only; no real Cloudflare request and no CI observed.
   - [ ] M5c: shared concurrency caps and the global daily budget with atomic reservations and
     settlement, including SDK retries.
 - [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
@@ -80,16 +82,45 @@ Historical dependency triage is recorded below. Current next slices:
 M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful) and so is M5a
 (commit `5eca4cb`, CI run `44187038198` observed successful).
 
-1. M5b-2: Turnstile server validation (`TURNSTILE_SECRET_KEY`) with the browser widget and a
-   bounded "verified human" window for anonymous admission.
-2. M5c: shared concurrency caps and the global daily budget with atomic reservations and
+1. M5c: shared concurrency caps and the global daily budget with atomic reservations and
    settlement, including SDK retries.
-3. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
+2. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
    polish. Resume of interrupted threads remains intentionally unimplemented.
-4. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
+3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
-5. Keep README truthful; a demo foundation is not a production-ready application.
+4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M5b-2 Turnstile session — November 17, 2026
+
+- Implemented: migration `0005_human_verification` (`auth_sessions.human_verified_until`);
+  `turnstile.py` (fixed `siteverify` endpoint, bounded reads, one retry with the same
+  idempotency key, hostname/action checks, redacted failures); `POST /api/v1/turnstile/verify`;
+  `Repository.mark_human_verified` (capped at the session expiry, anonymous sessions only);
+  `auth.human_verified`; enforcement in `main.research` before rate limits and quota;
+  `/me` reports `turnstile_required` and `human_verified_until`; `/api/v1/config` exposes the
+  public site key; readiness now requires Alembic revision `0005`.
+- Design choices: Turnstile is enabled only when both keys are configured, so every default
+  and demo configuration is unaffected; tokens are validated server-side only, and the browser
+  never sees the secret; failures (refused token, wrong host/action, timeout, malformed or
+  oversized body) all fail closed; a verification lasts `TURNSTILE_VERIFIED_MINUTES` (max 60)
+  and never outlives the session cookie; signed-in callers are never challenged.
+- Test-key handling: with Cloudflare's documented test secrets the hostname is always
+  `example.com` and no `action` is returned, so those two checks are applied only with a real
+  secret. Production readiness rejects test secrets and missing keys.
+- Frontend: `api/turnstile.ts` (explicit-render loader plus the verified call),
+  `components/HumanCheck.tsx` widget with a reset-on-failure path, a `turnstile_required`
+  retry flow in `App.tsx`, and new problem-code copy in `api/errors.ts`. No npm dependency
+  was added.
+- Observed locally: ruff/format/pyright clean; offline pytest 178 passed / 47 skipped;
+  `REQUIRE_PG=1` pytest 225 passed; frontend lint, typecheck, 52 tests and build passed
+  (bundle 498.45 kB, no warning); `scripts/smoke-docker.ps1` passed with the new
+  packaged-migration assertion (non-root, HTTP health, demo SSE).
+- NOT verified: a real Cloudflare widget or siteverify call, hostname/action behaviour with a
+  real key, and CI. No provider credits were used.
+- Blockers/limitations: widget availability depends on Cloudflare; the anonymous client IP is
+  sent to Cloudflare as `remoteip`; verification is per session and lasts up to one hour; a
+  future CSP must allow `challenges.cloudflare.com`; production stays blocked.
 
 ### M5b-1 daily quotas — November 17, 2026
 
@@ -232,10 +263,12 @@ M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful) and s
 
 ## API direction
 
-Current: GET /healthz, /readyz, /api/v1/config, /api/v1/models; POST /api/v1/research;
+Current: GET /healthz, /readyz, /api/v1/config (includes the public `turnstile_site_key`),
+/api/v1/models; POST /api/v1/research; POST /api/v1/turnstile/verify (session-owned);
 GET/POST /api/v1/threads; GET/PATCH/DELETE /api/v1/threads/{id} (session-owned);
 GET /api/v1/me (creates an anonymous session if absent; returns kind, user, csrf_token,
-login_enabled); GET /auth/github/login and /auth/github/callback; POST /auth/logout.
+login_enabled, turnstile_required, human_verified_until);
+GET /auth/github/login and /auth/github/callback; POST /auth/logout.
 Unsafe routes require Origin plus X-CSRF-Token. The OAuth callback is on the public origin.
 
 SSE: thread, run_started, step, token, sources, usage, quota, done, error. All are now

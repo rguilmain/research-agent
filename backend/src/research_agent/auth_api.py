@@ -5,19 +5,23 @@ rejects the request, so anonymous rows appear only when a browser asks for ident
 """
 
 import logging
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel, ConfigDict, Field
 
-from research_agent import github_oauth, ratelimit
+from research_agent import github_oauth, ratelimit, turnstile
 from research_agent.auth import (
+    AuthError,
     CsrfChecked,
     MeSession,
     browser_hash,
     clear_oauth_cookie,
     clear_session_cookie,
+    human_verified,
     new_token,
     optional_identity,
     repository_of,
@@ -37,15 +41,40 @@ OAUTH_STATE_MAX_AGE = 600
 AUTH_ERROR_REDIRECT = "/?auth_error=1"
 
 
+class TurnstileBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=turnstile.MAX_TOKEN_CHARS)
+
+
+def _problem(request: Request, status: int, code: str, title: str) -> JSONResponse:
+    """RFC 7807 response carrying a machine-readable code and the request id."""
+    return JSONResponse(
+        status_code=status,
+        content={
+            "type": "about:blank",
+            "title": title,
+            "status": status,
+            "code": code,
+            "request_id": request.state.request_id,
+        },
+        media_type="application/problem+json",
+    )
+
+
 def _me_body(context, settings) -> dict:
     user = None
     if context.kind == "user" and context.login:
         user = {"login": context.login, "avatar_url": context.avatar_url}
+    required = settings.turnstile_enabled and context.kind == "anonymous"
     return {
         "kind": context.kind,
         "user": user,
         "csrf_token": context.csrf_token,
         "login_enabled": settings.login_enabled,
+        "turnstile_required": required and not human_verified(context),
+        "human_verified_until": (
+            context.human_verified_until.isoformat() if context.human_verified_until else None
+        ),
     }
 
 
@@ -65,6 +94,45 @@ async def me(context: MeSession, request: Request):
             max_age=settings.anon_thread_ttl_hours * 3600,
         )
     return response
+
+
+@router.post("/api/v1/turnstile/verify")
+async def verify_human(body: TurnstileBody, request: Request, context: CsrfChecked):
+    """Validate a Turnstile token and record the human-verification window on the session.
+
+    Signed-in callers are never challenged. A refused or unreachable provider leaves the
+    session unverified, so anonymous research stays blocked: this always fails closed.
+    """
+    settings = settings_of(request)
+    repo = repository_of(request)
+    if repo is None or not settings.turnstile_enabled:
+        raise HTTPException(404, "Human verification is not configured")
+    if context.kind != "anonymous" or human_verified(context):
+        until = context.human_verified_until
+        return {"human_verified_until": until.isoformat() if until else None}
+    secret = settings.session_secret_bytes()
+    ip = ratelimit.client_ip(request, settings)
+    await ratelimit.enforce(
+        repo,
+        ratelimit.TURNSTILE_IP,
+        ratelimit.ip_key(secret, ip),
+        settings.rate_limit_turnstile_per_hour,
+    )
+    client: httpx.AsyncClient = request.app.state.http
+    try:
+        accepted = await turnstile.verify(client, settings, body.token, ip)
+    except turnstile.TurnstileUnavailable:
+        # Log the class only: provider messages can carry the token or secret.
+        logger.warning("Turnstile unavailable request_id=%s", request.state.request_id)
+        return _problem(
+            request, 503, "turnstile_unavailable", "Human verification is temporarily unavailable"
+        )
+    if not accepted:
+        return _problem(request, 403, "turnstile_failed", "Human verification failed")
+    until = datetime.now(UTC) + timedelta(minutes=settings.turnstile_verified_minutes)
+    if context.token_hash is None or not await repo.mark_human_verified(context.token_hash, until):
+        raise AuthError(401, "session_required", "Reload the page to start a session")
+    return {"human_verified_until": until.isoformat()}
 
 
 @router.get("/auth/github/login")

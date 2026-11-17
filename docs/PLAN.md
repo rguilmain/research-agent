@@ -36,14 +36,19 @@
     - [x] M3b (partial): saved-history API and sidebar, reopening saved threads,
       query-derived titles, cleanup of newly created empty threads after failed run
       admission, and a bounded multi-batch cleanup option. Scheduled cleanup and
-      resume stay out of scope. Verified locally only, not in CI yet.
+      resume stay out of scope. Covered by the CI PostgreSQL suite (see run `44181979216`).
 - [ ] M4: server-side GitHub OAuth (state, PKCE if supported), opaque hashed sessions,
   secure cookies, CSRF, restricted redirects, session rotation/logout, anonymous thread claim.
-  - [x] M4a (local, offline-tested only): all of the above implemented with migration
-    0002_identity; see the M4a session notes. Not yet verified: PostgreSQL suite with
-    REQUIRE_PG=1, Docker smoke, CI, and any real GitHub OAuth round trip.
+  - [x] M4a: implemented with migration 0002_identity; landed as commit `2d59afc` with CI run
+    `44181979216` observed successful (backend with REQUIRE_PG=1, frontend, Docker smoke).
+    The local PostgreSQL suite and Docker smoke had already passed locally; a real GitHub
+    OAuth round trip has never been performed. See the M4a session notes.
 - [ ] M5: Turnstile server validation, hashed-IP and cookie quotas, per-user quotas,
   shared SQL rate limits and concurrency limits, global budget reservations and settlement.
+  - [x] M5a: shared PostgreSQL fixed-window admission limits keyed by hashed client address,
+    session principal and login start, returning 429 problem JSON with `Retry-After` before
+    any row is created. Verified locally only (not yet committed or CI-verified). Turnstile,
+    daily quotas, the `quota` SSE event, concurrency caps and budget reservations remain open.
 - [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
   sign-in, Turnstile, persisted theme, accessibility and privacy/data deletion screens.
 - [ ] M7: same-origin production static serving, non-root multi-stage Docker image,
@@ -60,19 +65,60 @@
 
 Historical dependency triage is recorded below. Current next slices:
 
-1. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
+M4a is landed (commit `2d59afc`; CI run `44181979216` observed successful). M5a is
+implemented locally and uncommitted.
+
+1. Land M5a: rerun `REQUIRE_PG=1` pytest against a `_test` database plus
+   `scripts/smoke-docker.ps1`, commit, push and observe CI. Never claim CI success unobserved.
+2. M5b: Turnstile server validation (`TURNSTILE_SECRET_KEY`) with the browser widget, the
+   `quota` SSE event and the daily quotas in "Access and model policy to implement".
+3. M5c: shared concurrency caps and the global daily budget with atomic reservations and
+   settlement, including SDK retries.
+4. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
    polish. Resume of interrupted threads remains intentionally unimplemented.
-2. M4a is implemented but uncommitted. First run `REQUIRE_PG=1` pytest against a `_test`
-   database and `scripts/smoke-docker.ps1`, then commit and observe CI. Next slice is M5
-   (Turnstile, rate limits incl. anonymous session creation, quotas, budget reservations).
-3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
+5. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
-4. Keep README truthful; a demo foundation is not a production-ready application.
+6. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M5a rate limiting session — November 17, 2026
+
+- Implemented (uncommitted): migration `0003_rate_limits` (`rate_limit_counters` keyed by
+  scope + hashed key + aligned hour window, `count >= 0` check); `ratelimit.py` (trusted-proxy
+  aware `client_ip`, HMAC `ip_key`/`principal_key`, hour `window_start`, `CounterStore`
+  protocol, `enforce`, `RateLimitExceeded`); `Repository.consume_rate_limit` (single
+  `INSERT ... ON CONFLICT DO UPDATE ... RETURNING count` upsert, returns `allowed` and
+  `retry_after`) and `Repository.cleanup_rate_limits` (bounded, wired into
+  `cleanup_identity`); readiness now requires Alembic revision `0003`.
+- Enforced before any row is created: anonymous session creation in `auth.session_or_create`
+  (`anon_session` per hashed address, because that dependency—not the endpoint—mints the
+  session), research starts in `main.research` (`research_session` per principal for every
+  caller plus `research_ip` per hashed address for anonymous callers, so clearing cookies
+  does not reset the limit), and GitHub login start in `auth_api.github_login`. Over-limit
+  requests get 429 `problem+json` (`code: rate_limited`) with `Retry-After`.
+- Design choices: fixed aligned hour windows (a boundary burst can briefly exceed the limit);
+  counters are incremented before admission so a counted failure still consumes budget;
+  keys are HMACs under `SESSION_SECRET`, never raw addresses; `TRUST_PROXY_HEADERS` defaults
+  to false and, when enabled, prefers `Fly-Client-IP` and otherwise the rightmost
+  `X-Forwarded-For` hop (the only entry a client cannot forge behind one trusted ingress);
+  a process without a database is not limited.
+- Frontend: `api/errors.ts` `describeFailure` maps 429 to "Too many requests. Please try
+  again in a moment.", used by `useResearch.ts` and the identity error path in `App.tsx`;
+  new `errors.test.ts`.
+- Observed locally: Ruff format/check and pyright clean; offline pytest 144 passed / 25
+  skipped; `REQUIRE_PG=1` pytest 169 passed (87% coverage, `ratelimit.py` 100%);
+  frontend lint, typecheck, 34 tests and build passed (bundle 495 kB, no warning);
+  `scripts/smoke-docker.ps1` passed with the new packaged-migration assertion.
+- NOT verified: CI, a live Fly ingress (proxy-header trust is untested against real edge
+  headers), any live provider call. No dependency changes, so no `npm ci`/locked re-sync.
+- Blockers/limitations: Turnstile, daily quotas, the `quota` SSE event, concurrency caps and
+  monetary reservations are still missing; cleanup remains manual; production stays blocked.
+
 
 ### M4a identity session — November 17, 2026
 
-- Implemented (uncommitted): migration 0002_identity (principals, hashed sessions, OAuth
+- Implemented (landed as commit `2d59afc`; CI run `44181979216` observed successful):
+  migration 0002_identity (principals, hashed sessions, OAuth
   state); `auth.py` (HMAC session/CSRF tokens, Origin checks, cookie names, safe `next`),
   `auth_api.py` (`/api/v1/me`, GitHub login/callback with state + PKCE, logout),
   `github_oauth.py`, access-log query stripping in `logging.py`; thread and research routes
@@ -87,8 +133,9 @@ Historical dependency triage is recorded below. Current next slices:
   (image safety, packaged migrations incl. 0002, health, demo SSE with Origin header).
 - NOT verified: CI, a real GitHub OAuth round trip (no OAuth App credentials used),
   `npm ci`/`uv sync --locked` re-runs (no dependency changes were made).
-- Blockers/limitations: anonymous session rows can be created without limit by any
-  cookieless client (needs M5 rate limiting); cleanup is manual. Production stays blocked.
+- Blockers/limitations: anonymous session rows could be created without limit by any
+  cookieless client (addressed by M5a in the following session); cleanup is manual.
+  Production stays blocked.
 - Process note: the previous agent run looped on `read_files` returning `[outdated]` and on
   repeated check runs; prefer one `Get-Content` read per file and run checks once per change.
 

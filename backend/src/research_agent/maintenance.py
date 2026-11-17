@@ -72,6 +72,6 @@ def cleanup() -> None:
     except Exception:
         raise SystemExit("Database cleanup failed") from None
     print(
-        f"Removed {count} expired threads, sessions, OAuth states or empty principals "
-        f"(maximum {args.max_batches} batches)"
+        f"Removed {count} expired threads, sessions, OAuth states, empty principals "
+        f"or rate-limit windows (maximum {args.max_batches} batches)"
     )

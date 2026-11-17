@@ -6,3 +6,10 @@ export class ApiError extends Error {
     this.status = status
   }
 }
+
+/** User-facing text for a failed response; 429 means admission control refused us. */
+export function describeFailure(status: number): string {
+  return status === 429
+    ? 'Too many requests. Please try again in a moment.'
+    : `Request failed (${status})`
+}

@@ -69,7 +69,7 @@ async def db(pg_settings, migrated):
             await connection.execute(
                 text(
                     "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
-                    "checkpoints, checkpoint_blobs, checkpoint_writes CASCADE"
+                    "rate_limit_counters, checkpoints, checkpoint_blobs, checkpoint_writes CASCADE"
                 )
             )
         yield database

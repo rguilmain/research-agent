@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Alert, Box, Button, Chip, Container, CssBaseline, FormControl, InputLabel, MenuItem,
   Paper, Select, Stack, TextField, ThemeProvider, Typography, createTheme } from '@mui/material'
+import { ApiError, describeFailure } from './api/errors'
 import { ensureIdentity, loadIdentity, loginUrl, signOut } from './api/session'
 import type { Me } from './api/session'
 import ThreadHistory from './components/ThreadHistory'
@@ -51,8 +52,12 @@ export default function App() {
       // Identity is optional: demo mode without a database still streams research.
       try {
         setIdentity(await loadIdentity(abort.signal))
-      } catch {
-        if (!abort.signal.aborted) setIdentityError('Identity unavailable. Requests may be rejected.')
+      } catch (cause) {
+        if (!abort.signal.aborted) {
+          setIdentityError(cause instanceof ApiError
+            ? `Identity unavailable: ${describeFailure(cause.status)}`
+            : 'Identity unavailable. Requests may be rejected.')
+        }
       }
     }
     void load()

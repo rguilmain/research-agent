@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     session_secret: SecretStr = SecretStr("")
     user_session_idle_days: int = 7
     user_session_max_days: int = 30
+    trust_proxy_headers: bool = False
+    rate_limit_anon_session_per_hour: int = 30
+    rate_limit_research_per_hour: int = 30
+    rate_limit_login_per_hour: int = 10
 
     @property
     def login_enabled(self) -> bool:
@@ -134,6 +138,15 @@ class Settings(BaseSettings):
             <= 0
         ):
             raise ValueError("Execution limits must be positive")
+        if (
+            min(
+                self.rate_limit_anon_session_per_hour,
+                self.rate_limit_research_per_hour,
+                self.rate_limit_login_per_hour,
+            )
+            <= 0
+        ):
+            raise ValueError("Rate limits must be positive")
         return self
 
 

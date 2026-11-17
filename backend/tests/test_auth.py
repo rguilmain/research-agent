@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI, Response
 from starlette.requests import Request
 
+from research_agent import ratelimit
 from research_agent.auth import (
     SECURE_SESSION_COOKIE,
     SESSION_COOKIE,
@@ -41,6 +42,14 @@ class FakeRepository:
         self.sessions: dict[str, SessionRecord] = {}
         self.created = 0
         self.revoked: list[str] = []
+        self.denied = False
+        self.rate_limits: list[tuple[str, str, int]] = []
+
+    async def consume_rate_limit(
+        self, scope: str, key: str, window_start: datetime, limit: int
+    ) -> tuple[bool, int]:
+        self.rate_limits.append((scope, key, limit))
+        return not self.denied, 60
 
     async def create_anonymous_session(self, token_hash: str) -> SessionRecord:
         self.created += 1
@@ -248,6 +257,20 @@ async def test_session_or_create_makes_an_anonymous_session() -> None:
     assert context.token is not None
     assert context.csrf_token is not None
     assert repo.created == 1
+    assert repo.rate_limits[0][0] == ratelimit.ANON_SESSION
+
+
+async def test_session_or_create_is_refused_when_the_address_is_limited() -> None:
+    config = settings()
+    repo = FakeRepository()
+    repo.denied = True
+    with pytest.raises(ratelimit.RateLimitExceeded) as excinfo:
+        await session_or_create(make_request(config, repo))
+    assert excinfo.value.scope == ratelimit.ANON_SESSION
+    assert repo.created == 0
+    scope, key, limit = repo.rate_limits[0]
+    assert (scope, limit) == (ratelimit.ANON_SESSION, config.rate_limit_anon_session_per_hour)
+    assert len(key) == 64
 
 
 async def test_session_or_create_reuses_an_existing_session() -> None:

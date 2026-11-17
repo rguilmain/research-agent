@@ -16,6 +16,7 @@ from uuid import UUID
 
 from fastapi import Depends, Request, Response
 
+from research_agent import ratelimit
 from research_agent.config import Settings
 from research_agent.repository import Identity, Repository, SessionRecord
 
@@ -218,6 +219,14 @@ async def session_or_create(request: Request) -> AuthContext:
     context = await _resolve(request)
     if context is not None:
         return context
+    # This dependency, not the endpoint, creates the row, so admission control belongs
+    # here: GET /api/v1/me is the only route that can mint an anonymous session.
+    await ratelimit.enforce(
+        repo,
+        ratelimit.ANON_SESSION,
+        ratelimit.ip_key(settings.session_secret_bytes(), ratelimit.client_ip(request, settings)),
+        settings.rate_limit_anon_session_per_hour,
+    )
     secret = settings.session_secret_bytes()
     token = new_token()
     record = await repo.create_anonymous_session(token_hash(secret, token))

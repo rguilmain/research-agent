@@ -92,6 +92,25 @@ class OAuthState(Base):
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class RateLimitCounter(Base):
+    """One counter per scope, hashed key and fixed window.
+
+    Keys are HMACs of a client address, principal or token: raw IPs are never stored.
+    Rows are incremented atomically with a single upsert, so limits hold across processes.
+    """
+
+    __tablename__ = "rate_limit_counters"
+    __table_args__ = (
+        CheckConstraint("count >= 0"),
+        Index("ix_rate_limit_counters_window", "window_start"),
+    )
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Run(Base):
     __tablename__ = "runs"
     __table_args__ = (

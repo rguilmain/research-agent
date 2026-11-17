@@ -57,8 +57,11 @@ and reconciles up to 100 stale runs. It is not scheduled automatically.
 `GET /api/v1/me`; threads are owned by that session. Optional GitHub sign-in (set
 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `SESSION_SECRET` in `backend/.env`, with
 callback `<PUBLIC_BASE_URL>/auth/github/callback`) claims the anonymous session's threads.
-Quotas and abuse limits are not implemented, so still do not expose this application to
-other users. Real prompts, assistant/tool messages
+When a database is configured, anonymous session creation, research starts and sign-in
+attempts are rate limited per hashed client address (429 with `Retry-After`); demo mode
+without a database is not limited. Daily quotas, Turnstile and budget reservations are not
+implemented, so still do not expose this application to other users. Real prompts,
+assistant/tool messages
 and agent state are persisted for live conversations; demo output is never checkpointed.
 Anonymous threads expire after 24 hours; physical deletion requires the cleanup command.
 Saved live threads appear in a sidebar that lists, renames, deletes and reopens them; it
@@ -90,13 +93,15 @@ Do not enable expensive models before the budget-reservation milestone.
 - Saved-history browsing: an owner-scoped transcript endpoint, a visible thread sidebar with
   rename/delete, reopening saved threads, live query-derived titles, and automatic cleanup of
   empty threads left by failed run admission.
+- Shared PostgreSQL admission limits: per-hashed-address anonymous session and sign-in starts,
+  plus per-principal and per-address research starts, refused early with 429 and `Retry-After`.
 
 ## Planned launch features
 
 Hybrid access: anonymous users pass Turnstile and get a small daily quota; GitHub
 users get more quota and saved-history browsing. PostgreSQL already stores development
-threads and runs, and development sessions/GitHub sign-in exist; Turnstile, quotas and
-atomic cost reservations are **not implemented**.
+threads and runs, development sessions/GitHub sign-in exist and shared rate limits are
+implemented; Turnstile, daily quotas and atomic cost reservations are **not implemented**.
 Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
 ## Checks

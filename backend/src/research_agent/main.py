@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 
-from research_agent import __version__
+from research_agent import __version__, ratelimit
 from research_agent.auth import AuthContext, AuthError, require_csrf
 from research_agent.auth_api import router as auth_router
 from research_agent.catalog import load_catalog
@@ -25,6 +25,7 @@ from research_agent.db import Database, configure_event_loop
 from research_agent.events import validate_event
 from research_agent.guards import RunContext, RunLimitExceeded
 from research_agent.logging import build_log_config
+from research_agent.ratelimit import RateLimitExceeded
 from research_agent.repository import Conflict, NotFound, Repository
 from research_agent.research import DemoResearch, LiveResearch, ResearchService
 from research_agent.streaming import stream_events
@@ -91,6 +92,21 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 "code": exc.code,
                 "request_id": request.state.request_id,
             },
+            media_type="application/problem+json",
+        )
+
+    @app.exception_handler(RateLimitExceeded)
+    async def rate_limited(request: Request, exc: RateLimitExceeded):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "type": "about:blank",
+                "title": "Too many requests",
+                "status": 429,
+                "code": "rate_limited",
+                "request_id": request.state.request_id,
+            },
+            headers={"Retry-After": str(exc.retry_after)},
             media_type="application/problem+json",
         )
 
@@ -174,6 +190,23 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
         run_id = None
         lock = AsyncExitStack()
         if repo:
+            # Admission control runs before any row is created, so a refused request
+            # never leaves a thread or an active run behind.
+            secret = config.session_secret_bytes()
+            await ratelimit.enforce(
+                repo,
+                ratelimit.RESEARCH_SESSION,
+                ratelimit.principal_key(secret, session.identity.id),
+                config.rate_limit_research_per_hour,
+            )
+            if session.kind == "anonymous":
+                # Cookie-less clients must also be limited by address, not only by cookie.
+                await ratelimit.enforce(
+                    repo,
+                    ratelimit.RESEARCH_IP,
+                    ratelimit.ip_key(secret, ratelimit.client_ip(request, config)),
+                    config.rate_limit_research_per_hour,
+                )
             created = thread_id is None
             try:
                 if thread_id is None:

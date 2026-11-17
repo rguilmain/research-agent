@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from research_agent import github_oauth
+from research_agent import github_oauth, ratelimit
 from research_agent.auth import (
     CsrfChecked,
     MeSession,
@@ -75,6 +75,12 @@ async def github_login(request: Request, next: str = "/"):
     if repo is None or not settings.login_enabled:
         raise HTTPException(404, "GitHub sign-in is not configured")
     secret = settings.session_secret_bytes()
+    await ratelimit.enforce(
+        repo,
+        ratelimit.LOGIN_IP,
+        ratelimit.ip_key(secret, ratelimit.client_ip(request, settings)),
+        settings.rate_limit_login_per_hour,
+    )
     state = new_token()
     verifier = new_token()
     browser = new_token()

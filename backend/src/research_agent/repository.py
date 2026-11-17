@@ -12,10 +12,22 @@ from sqlalchemy.dialects.postgresql import insert
 from research_agent.config import Settings
 from research_agent.db import Database
 from research_agent.history import History, public_messages
-from research_agent.storage_models import AuthSession, OAuthState, Principal, Run, Thread, User, now
+from research_agent.storage_models import (
+    AuthSession,
+    OAuthState,
+    Principal,
+    RateLimitCounter,
+    Run,
+    Thread,
+    User,
+    now,
+)
 
 SESSION_TOUCH_INTERVAL = timedelta(minutes=1)
 OAUTH_STATE_TTL = timedelta(minutes=10)
+# One aligned window per hour, and one extra window kept for Retry-After accuracy.
+RATE_LIMIT_WINDOW = timedelta(hours=1)
+RATE_LIMIT_RETENTION_WINDOWS = 2
 
 
 @dataclass(frozen=True)
@@ -328,6 +340,53 @@ class Repository:
                 continue
         return count
 
+    async def consume_rate_limit(
+        self, scope: str, key: str, window_start: datetime, limit: int
+    ) -> tuple[bool, int]:
+        """Atomically count one attempt and report whether the window still allows it.
+
+        The counter is incremented before any work is admitted, so an attempt that later
+        fails still consumes budget: this never over-admits. One statement means parallel
+        workers cannot lose an increment.
+        """
+        async with self.db.sessions.begin() as session:
+            count = (
+                await session.execute(
+                    insert(RateLimitCounter)
+                    .values(
+                        scope=scope,
+                        key_hash=key,
+                        window_start=window_start,
+                        count=1,
+                        updated_at=now(),
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[
+                            RateLimitCounter.scope,
+                            RateLimitCounter.key_hash,
+                            RateLimitCounter.window_start,
+                        ],
+                        set_={"count": RateLimitCounter.count + 1, "updated_at": now()},
+                    )
+                    .returning(RateLimitCounter.count)
+                )
+            ).scalar_one()
+        expires = window_start + RATE_LIMIT_WINDOW
+        retry_after = max(1, int((expires - now()).total_seconds()))
+        return count <= limit, retry_after
+
+    async def cleanup_rate_limits(self) -> int:
+        """Delete counter rows outside the retention windows; safe to run repeatedly."""
+        cutoff = now() - RATE_LIMIT_WINDOW * RATE_LIMIT_RETENTION_WINDOWS
+        async with self.db.sessions.begin() as session:
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(
+                    delete(RateLimitCounter).where(RateLimitCounter.window_start < cutoff)
+                ),
+            )
+            return result.rowcount or 0
+
     async def create_anonymous_session(self, token_hash: str) -> SessionRecord:
         """Create an anonymous principal and its session for a browser without one."""
         expires_at = now() + timedelta(hours=self.settings.anon_thread_ttl_hours)
@@ -560,4 +619,6 @@ class Repository:
                     await session.execute(delete(Principal).where(Principal.id.in_(ids))),
                 )
                 removed += result.rowcount or 0
+        # Counters expire on their own schedule and must never accumulate without bound.
+        removed += await self.cleanup_rate_limits()
         return removed

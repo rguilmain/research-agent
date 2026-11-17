@@ -91,9 +91,22 @@ loopback aliases are accepted only outside production. GitHub sign-in uses state
 a browser-binding cookie, single-use hashed state rows and a relative `next` path. Login
 revokes the anonymous session and moves its live threads to the user principal in one
 transaction, then issues a new user session (idle and absolute expiry). Logout revokes
-the session. `research-agent-cleanup` also purges expired sessions, OAuth states and
-empty anonymous principals in bounded batches. Anonymous session creation is not rate
-limited yet (M5).
+the session. `research-agent-cleanup` also purges expired sessions, OAuth states,
+empty anonymous principals and expired rate-limit windows in bounded batches.
+
+Admission limits (M5a): `rate_limit_counters` holds one row per scope, HMAC key and aligned
+hour window, incremented by a single upsert so counts stay exact across processes.
+`GET /api/v1/me` counts anonymous session creation per hashed client address; research
+counts every start per session principal and, for anonymous callers, per hashed address so
+clearing cookies does not reset the limit; GitHub login start is counted per address.
+Refusals return 429 `problem+json` with `Retry-After` before any thread, run or OAuth state
+row is created. Keys are HMACs under `SESSION_SECRET`, so raw addresses are never stored.
+`TRUST_PROXY_HEADERS` defaults to false; when enabled the server prefers `Fly-Client-IP` and
+otherwise the rightmost `X-Forwarded-For` hop, the only entry a client cannot forge behind a
+single trusted ingress. That assumption must be re-verified against the real Fly ingress in
+M9. A process without a database is not limited, which is development-only behavior. Known
+limits: fixed windows allow a brief boundary burst and address limits do not stop distributed
+abuse; Turnstile, daily quotas and monetary reservations remain M5.
 Threads fix their model and demo/live mode at creation. Demo run metadata is explicitly
 marked, but demo answers are never checkpointed. GET thread returns metadata only, not
 raw checkpoint state, reasoning or tool arguments. GET /threads/{id}/messages projects a

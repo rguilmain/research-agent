@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { describeFailure } from '../api/errors'
 import { csrfHeaders } from '../api/session'
 import { readEvents } from '../api/stream'
 import { getMessages } from '../api/threads'
@@ -75,7 +76,7 @@ export function useResearch() {
         body: JSON.stringify({ query, model_id,
           ...(continuing ? { thread_id: thread.current!.id } : {}) }), signal: abort.signal,
       })
-      if (!response.ok || !response.body) throw new Error(`Request failed (${response.status})`)
+      if (!response.ok || !response.body) throw new Error(describeFailure(response.status))
       let completed = false
       for await (const event of readEvents(response.body)) {
         switch (event.type) {

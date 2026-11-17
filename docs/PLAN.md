@@ -97,6 +97,9 @@ Historical dependency triage is recorded below. Current next slices:
   (non-root, packaged catalog/migrations, no `/app` `.env`, HTTP health, demo SSE).
 - No live provider calls, no keys, no paid infrastructure, no deployment. Production
   startup remains blocked. Retention cleanup scheduling and thread resume remain open.
+- CI observed successful for this session's commit 7b7b46a in run 44142796263 (backend
+  with required PostgreSQL tests, frontend, Docker smoke). Dependency merges each passed
+  their own main runs before it.
 
 ## Access and model policy to implement
 

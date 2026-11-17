@@ -57,8 +57,9 @@ and reconciles up to 100 stale runs. It is not scheduled automatically.
 Do not expose this application to other users. Real prompts, assistant/tool messages
 and agent state are persisted for live conversations; demo output is never checkpointed.
 Anonymous threads expire after 24 hours; physical deletion requires the cleanup command.
-The UI retains a thread only in memory and supports **New thread**; it has no history sidebar yet.
-Interrupted threads are not resumed automatically; use a new thread.
+Saved live threads appear in a sidebar that lists, renames, deletes and reopens them; it
+hides itself when no database is configured. Demo threads are listed but have no stored
+transcript. Interrupted threads are not resumed automatically; use a new thread.
 
 ## Models
 

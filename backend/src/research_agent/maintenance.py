@@ -52,6 +52,13 @@ async def cleanup_database(max_batches: int = 1):
             total += count
             if count == 0:
                 break
+        # Sessions and OAuth states expire independently of threads; each pass is
+        # bounded so a large backlog cannot turn one invocation into a long scan.
+        for _ in range(max_batches):
+            removed = await repo.cleanup_identity()
+            total += removed
+            if removed == 0:
+                break
         return total
 
 
@@ -64,4 +71,7 @@ def cleanup() -> None:
         count = asyncio.run(cleanup_database(args.max_batches))
     except Exception:
         raise SystemExit("Database cleanup failed") from None
-    print(f"Removed {count} expired/deleted/empty threads (maximum {args.max_batches} batches)")
+    print(
+        f"Removed {count} expired threads, sessions, OAuth states or empty principals "
+        f"(maximum {args.max_batches} batches)"
+    )

@@ -1,4 +1,8 @@
+import { ApiError } from './errors'
+import { csrfHeaders } from './session'
 import { validateEvent } from './stream'
+
+export { ApiError }
 
 export type Source = { url: string; title: string }
 export type Turn = { role: 'user' | 'assistant'; text: string; sources: Source[] }
@@ -9,11 +13,6 @@ const record = (v: unknown): v is Record<string, unknown> => typeof v === 'objec
 const text = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max
 const uuid = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v)
 const date = (v: unknown): v is string => text(v, 100) && Number.isFinite(Date.parse(v))
-
-export class ApiError extends Error {
-  readonly status: number
-  constructor(status: number) { super(`Request failed (${status})`); this.status = status }
-}
 
 export function validateThread(v: unknown): Thread {
   if (!record(v) || !uuid(v.id) || !text(v.title, 200) || !text(v.model_id, 100) ||
@@ -60,10 +59,14 @@ export async function getThread(id: string, signal?: AbortSignal): Promise<Threa
 export async function getMessages(id: string, signal?: AbortSignal): Promise<History> {
   return validateHistory(await (await request(`${path(id)}/messages`, { signal })).json())
 }
+// Every unsafe method needs the session's CSRF token; the server rejects the rest.
+const unsafeHeaders = (extra: Record<string, string> = {}): Record<string, string> => ({
+  ...csrfHeaders(), ...extra })
+
 export async function renameThread(id: string, title: string): Promise<Thread> {
   return validateThread(await (await request(path(id), { method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })).json())
+    headers: unsafeHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ title }) })).json())
 }
 export async function deleteThread(id: string): Promise<void> {
-  await request(path(id), { method: 'DELETE' })
+  await request(path(id), { method: 'DELETE', headers: unsafeHeaders() })
 }

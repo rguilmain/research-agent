@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from auth_fixtures import origin_headers
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -10,7 +11,8 @@ from research_agent.main import create_app
 
 @pytest.fixture
 def client():
-    with TestClient(create_app(Settings(app_env="test"))) as client:
+    # Unsafe routes require a same-origin proof even in demo mode without a database.
+    with TestClient(create_app(Settings(app_env="test")), headers=origin_headers()) as client:
         yield client
 
 
@@ -64,7 +66,29 @@ def test_stream_error_is_redacted():
             yield {"type": "run_started", "model_id": model_id, "demo": False}
             raise RuntimeError("https://provider.test/?apikey=NEVER-EXPOSE")
 
-    with TestClient(create_app(Settings(app_env="test"), BrokenResearch())) as client:
+    with TestClient(
+        create_app(Settings(app_env="test"), BrokenResearch()), headers=origin_headers()
+    ) as client:
         response = client.post("/api/v1/research", json={"query": "test"})
         assert '"type": "error"' in response.text
         assert "NEVER-EXPOSE" not in response.text
+
+
+def test_csrf_origin_is_required_for_unsafe_routes(client):
+    blocked = client.post(
+        "/api/v1/research", json={"query": "q"}, headers={"origin": "http://evil.example"}
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["code"] == "csrf_failed"
+    assert blocked.headers["content-type"] == "application/problem+json"
+
+
+def test_me_reports_anonymous_identity_without_database(client):
+    response = client.get("/api/v1/me")
+    assert response.status_code == 200
+    assert response.json() == {
+        "kind": "none",
+        "user": None,
+        "csrf_token": None,
+        "login_enabled": False,
+    }

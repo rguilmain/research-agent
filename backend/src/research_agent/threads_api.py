@@ -1,4 +1,4 @@
-"""Local-development metadata APIs. Real authentication and CSRF are still blocked on M4."""
+"""Owner-scoped thread metadata APIs, guarded by sessions and CSRF tokens."""
 
 from typing import Annotated
 from uuid import UUID
@@ -6,18 +6,22 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from research_agent.auth import AuthContext, authenticated, require_csrf
 from research_agent.catalog import load_catalog
 from research_agent.history import History
 from research_agent.repository import Identity, Repository
 
 router = APIRouter(prefix="/api/v1/threads")
-LOCAL_ID = UUID("00000000-0000-4000-8000-000000000001")
 
 
-def current_principal(request: Request) -> Identity:
-    if request.app.state.settings.app_env not in {"development", "test"}:
-        raise HTTPException(503, "Authentication not available")
-    return Identity(LOCAL_ID)
+async def current_principal(context: Annotated[AuthContext, Depends(authenticated)]) -> Identity:
+    """Read-only routes: a live session is required when persistence is configured."""
+    return context.identity
+
+
+async def csrf_principal(context: Annotated[AuthContext, Depends(require_csrf)]) -> Identity:
+    """Mutating routes: origin check plus a per-session CSRF token."""
+    return context.identity
 
 
 def repository(request: Request) -> Repository:
@@ -28,6 +32,7 @@ def repository(request: Request) -> Repository:
 
 
 Owner = Annotated[Identity, Depends(current_principal)]
+CsrfOwner = Annotated[Identity, Depends(csrf_principal)]
 Storage = Annotated[Repository, Depends(repository)]
 
 
@@ -55,7 +60,7 @@ def allowed_model(model_id: str) -> None:
 
 
 @router.post("", status_code=201)
-async def create_thread(body: ThreadCreate, request: Request, owner: Owner, repo: Storage):
+async def create_thread(body: ThreadCreate, request: Request, owner: CsrfOwner, repo: Storage):
     model_id = body.model_id or request.app.state.settings.default_model
     allowed_model(model_id)
     return await repo.create_thread(owner, model_id, body.title)
@@ -77,7 +82,7 @@ async def get_thread(thread_id: UUID, owner: Owner, repo: Storage):
 
 
 @router.patch("/{thread_id}")
-async def patch_thread(thread_id: UUID, body: ThreadPatch, owner: Owner, repo: Storage):
+async def patch_thread(thread_id: UUID, body: ThreadPatch, owner: CsrfOwner, repo: Storage):
     return await repo.change_thread(owner, thread_id, body.title)
 
 
@@ -87,5 +92,5 @@ async def get_messages(thread_id: UUID, owner: Owner, repo: Storage):
 
 
 @router.delete("/{thread_id}", status_code=204)
-async def delete_thread(thread_id: UUID, owner: Owner, repo: Storage):
+async def delete_thread(thread_id: UUID, owner: CsrfOwner, repo: Storage):
     await repo.change_thread(owner, thread_id, None)

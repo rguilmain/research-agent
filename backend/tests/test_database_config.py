@@ -1,4 +1,5 @@
 import pytest
+from auth_fixtures import origin_headers
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
@@ -56,7 +57,7 @@ def test_pool_logs_discard_exception_details():
 
 
 def test_no_database_apis_fail_closed_and_owner_is_not_client_controlled():
-    with TestClient(create_app(Settings())) as client:
+    with TestClient(create_app(Settings()), headers=origin_headers()) as client:
         assert client.get("/api/v1/threads").status_code == 503
         assert (
             client.post(

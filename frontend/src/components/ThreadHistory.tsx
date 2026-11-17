@@ -48,7 +48,7 @@ export default function ThreadHistory({ activeId, busy, version, onOpen, onDelet
   if (!available) return null
   const content = <Box component="nav" aria-label="Thread history" sx={{ width: 270, p: 2 }}>
     <Typography variant="h6">Thread history</Typography>
-    <Typography variant="caption">Local development only: all requests share one identity. Not authenticated.</Typography>
+    <Typography variant="caption">Threads belong to this browser session; sign in to keep them.</Typography>
     {error && <Alert severity="error">{error}</Alert>}
     {loading && <Typography role="status">Loading history…</Typography>}
     {!loading && !items.length && <Typography>No saved threads.</Typography>}

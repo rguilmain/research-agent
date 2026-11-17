@@ -79,8 +79,21 @@ points explicitly use a selector event loop. Database URLs are secret settings; 
 exception messages are redacted and SQL parameter logging is disabled.
 
 Every metadata query is owner-scoped; unknown/foreign/deleted/expired resources return
-404. This is NOT authentication: all development requests share one fixed anonymous
-identity until M4. No client-provided owner ID is accepted. Production remains blocked.
+404. The owner is the principal of the request's session; no client-provided owner ID is
+accepted. Production remains blocked.
+
+Identity (M4a): `GET /api/v1/me` is the only endpoint that creates a session (anonymous,
+expiring with `ANON_THREAD_TTL_HOURS`). Tokens are random; the database stores only an
+HMAC under `SESSION_SECRET`, and the CSRF token is a second HMAC of that hash, returned in
+`/me` and sent as `X-CSRF-Token`. Unsafe routes (research, thread create/rename/delete,
+logout) require an allowed Origin (or `Sec-Fetch-Site: same-origin`) plus that token;
+loopback aliases are accepted only outside production. GitHub sign-in uses state and PKCE,
+a browser-binding cookie, single-use hashed state rows and a relative `next` path. Login
+revokes the anonymous session and moves its live threads to the user principal in one
+transaction, then issues a new user session (idle and absolute expiry). Logout revokes
+the session. `research-agent-cleanup` also purges expired sessions, OAuth states and
+empty anonymous principals in bounded batches. Anonymous session creation is not rate
+limited yet (M5).
 Threads fix their model and demo/live mode at creation. Demo run metadata is explicitly
 marked, but demo answers are never checkpointed. GET thread returns metadata only, not
 raw checkpoint state, reasoning or tool arguments. GET /threads/{id}/messages projects a

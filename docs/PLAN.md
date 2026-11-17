@@ -39,6 +39,9 @@
       resume stay out of scope. Verified locally only, not in CI yet.
 - [ ] M4: server-side GitHub OAuth (state, PKCE if supported), opaque hashed sessions,
   secure cookies, CSRF, restricted redirects, session rotation/logout, anonymous thread claim.
+  - [x] M4a (local, offline-tested only): all of the above implemented with migration
+    0002_identity; see the M4a session notes. Not yet verified: PostgreSQL suite with
+    REQUIRE_PG=1, Docker smoke, CI, and any real GitHub OAuth round trip.
 - [ ] M5: Turnstile server validation, hashed-IP and cookie quotas, per-user quotas,
   shared SQL rate limits and concurrency limits, global budget reservations and settlement.
 - [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
@@ -59,13 +62,35 @@ Historical dependency triage is recorded below. Current next slices:
 
 1. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
    polish. Resume of interrupted threads remains intentionally unimplemented.
-2. Preferred next substantive slice is M4 (GitHub OAuth, opaque hashed sessions, CSRF,
-   anonymous thread claim), then M5 quotas and atomic budget reservations. Confirm scope
-   before starting.
+2. M4a is implemented but uncommitted. First run `REQUIRE_PG=1` pytest against a `_test`
+   database and `scripts/smoke-docker.ps1`, then commit and observe CI. Next slice is M5
+   (Turnstile, rate limits incl. anonymous session creation, quotas, budget reservations).
 3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M4a identity session — November 17, 2026
+
+- Implemented (uncommitted): migration 0002_identity (principals, hashed sessions, OAuth
+  state); `auth.py` (HMAC session/CSRF tokens, Origin checks, cookie names, safe `next`),
+  `auth_api.py` (`/api/v1/me`, GitHub login/callback with state + PKCE, logout),
+  `github_oauth.py`, access-log query stripping in `logging.py`; thread and research routes
+  owned by the session principal, unsafe routes require Origin + CSRF; login atomically
+  revokes the anonymous session and claims its live threads; cleanup purges expired
+  sessions/OAuth states/empty anonymous principals in bounded batches.
+- Frontend: `api/session.ts` (validated `/me`, cached CSRF token, sign-out), CSRF header on
+  research/rename/delete, sign-in/out and auth-error UI in `App.tsx`, updated sidebar text.
+- Observed locally: Ruff check/format and pyright clean; pytest 130 passed / 19 skipped
+  without a database and 149 passed with `REQUIRE_PG=1` against `research_agent_test`;
+  frontend lint, typecheck, 31 tests and build passed; `scripts/smoke-docker.ps1` passed
+  (image safety, packaged migrations incl. 0002, health, demo SSE with Origin header).
+- NOT verified: CI, a real GitHub OAuth round trip (no OAuth App credentials used),
+  `npm ci`/`uv sync --locked` re-runs (no dependency changes were made).
+- Blockers/limitations: anonymous session rows can be created without limit by any
+  cookieless client (needs M5 rate limiting); cleanup is manual. Production stays blocked.
+- Process note: the previous agent run looped on `read_files` returning `[outdated]` and on
+  repeated check runs; prefer one `Get-Content` read per file and run checks once per change.
 
 ### M3b history/sidebar/cleanup session — November 17, 2026
 
@@ -103,18 +128,6 @@ Historical dependency triage is recorded below. Current next slices:
 
 ## Access and model policy to implement
 
-1. M3a landed in 9cbb7fb with cross-platform lint fix b535d8e; CI run 43825899521 passed.
-   Run all AGENTS.md checks again before further implementation.
-2. M1b and non-durable M2b controls verified offline; live access/reasoning/pricing remain
-   unverified. Do not spend provider credits without keys/approval.
-3. PostgreSQL and migrations are implemented. Next candidate slices are M3b history/resume
-   UX and cleanup operations, or M4/M5 authentication and budget controls together with
-   adversarial/concurrency tests. Confirm scope before starting another milestone.
-4. Latest approved scope was only to land M3a and observe CI; stop after that handoff.
-5. Keep README truthful; a demo foundation is not a production-ready application.
-
-## Access and model policy to implement
-
 - Anonymous: 3 questions/day, Luna only, verified-human cookie up to 1 hour;
   anonymous chat expires after 24 hours. Enforce both cookie and hashed-IP limits,
   not a combined key that allows bypass by resetting cookies.
@@ -132,9 +145,10 @@ Historical dependency triage is recorded below. Current next slices:
 ## API direction
 
 Current: GET /healthz, /readyz, /api/v1/config, /api/v1/models; POST /api/v1/research;
-GET/POST /api/v1/threads; GET/PATCH/DELETE /api/v1/threads/{id} (metadata, local identity).
-Planned: GET /api/v1/me; GET /auth/github/login and /auth/github/callback;
-POST /auth/logout. OAuth callback should be on the same public origin.
+GET/POST /api/v1/threads; GET/PATCH/DELETE /api/v1/threads/{id} (session-owned);
+GET /api/v1/me (creates an anonymous session if absent; returns kind, user, csrf_token,
+login_enabled); GET /auth/github/login and /auth/github/callback; POST /auth/logout.
+Unsafe routes require Origin plus X-CSRF-Token. The OAuth callback is on the public origin.
 
 SSE: thread, run_started, step, token, sources, usage, quota, done, error. Current implementation
 supports these except quota. Never stream raw chain-of-thought or secret

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { ApiError, deleteThread, getMessages, listThreads, renameThread, validateHistory,
   validateThread } from './threads'
+import { loadIdentity, resetIdentity } from './session'
 
 const id = '00000000-0000-4000-8000-000000000001'
 const thread = { id, title: 'Question', model_id: 'gpt-6-luna', demo: false,
@@ -9,7 +10,7 @@ const history = { items: [{ role: 'assistant', text: 'Answer',
   sources: [{ url: 'https://example.org', title: 'Evidence' }] }],
   status: 'completed', can_continue: true, demo: false, truncated: false }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); resetIdentity() })
 
 function stub(value: unknown, status = 200) {
   const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(value), { status }))
@@ -51,6 +52,22 @@ describe('thread API', () => {
     const empty = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', empty)
     await deleteThread(id)
-    expect(empty).toHaveBeenCalledWith(`/api/v1/threads/${id}`, { method: 'DELETE' })
+    expect(empty).toHaveBeenCalledWith(`/api/v1/threads/${id}`,
+      expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('sends the session CSRF token on unsafe methods only', async () => {
+    const me = { kind: 'anonymous', user: null, csrf_token: 'csrf-value', login_enabled: false }
+    const fetch = vi.fn().mockImplementation((url: string) => {
+      const body = url === '/api/v1/me' ? me : url.includes('?') ? { items: [thread] } : thread
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
+    })
+    vi.stubGlobal('fetch', fetch)
+    await loadIdentity()
+    await renameThread(id, 'Renamed')
+    expect((fetch.mock.calls[1][1].headers as Record<string, string>)['X-CSRF-Token'])
+      .toBe('csrf-value')
+    await listThreads(0)
+    expect(fetch.mock.calls[2][1]).not.toHaveProperty('headers')
   })
 })

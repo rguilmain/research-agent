@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { csrfHeaders } from '../api/session'
 import { readEvents } from '../api/stream'
 import { getMessages } from '../api/threads'
 import type { Source, Thread, Turn } from '../api/threads'
@@ -70,7 +71,7 @@ export function useResearch() {
       index === value.length - 1 ? { ...turn, text: turn.text + (text ?? ''), sources: sources ?? turn.sources } : turn))
     try {
       const response = await fetch('/api/v1/research', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
         body: JSON.stringify({ query, model_id,
           ...(continuing ? { thread_id: thread.current!.id } : {}) }), signal: abort.signal,
       })

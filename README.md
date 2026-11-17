@@ -53,8 +53,12 @@ Migrations are explicit and repeatable; application startup never creates tables
 `uv run research-agent-cleanup` removes up to 100 expired/deleted threads per invocation
 and reconciles up to 100 stale runs. It is not scheduled automatically.
 
-**Not authentication:** all local requests share one development identity until M4.
-Do not expose this application to other users. Real prompts, assistant/tool messages
+**Identity (development only):** the browser gets an anonymous session cookie from
+`GET /api/v1/me`; threads are owned by that session. Optional GitHub sign-in (set
+`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `SESSION_SECRET` in `backend/.env`, with
+callback `<PUBLIC_BASE_URL>/auth/github/callback`) claims the anonymous session's threads.
+Quotas and abuse limits are not implemented, so still do not expose this application to
+other users. Real prompts, assistant/tool messages
 and agent state are persisted for live conversations; demo output is never checkpointed.
 Anonymous threads expire after 24 hours; physical deletion requires the cleanup command.
 Saved live threads appear in a sidebar that lists, renames, deletes and reopens them; it
@@ -91,7 +95,8 @@ Do not enable expensive models before the budget-reservation milestone.
 
 Hybrid access: anonymous users pass Turnstile and get a small daily quota; GitHub
 users get more quota and saved-history browsing. PostgreSQL already stores development
-threads and runs; real identity, quotas and atomic cost reservations are **not implemented**.
+threads and runs, and development sessions/GitHub sign-in exist; Turnstile, quotas and
+atomic cost reservations are **not implemented**.
 Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
 ## Checks

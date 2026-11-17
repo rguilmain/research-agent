@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Alert, Box, Button, Chip, Container, CssBaseline, FormControl, InputLabel, MenuItem,
   Paper, Select, Stack, TextField, ThemeProvider, Typography, createTheme } from '@mui/material'
+import { ensureIdentity, loadIdentity, loginUrl, signOut } from './api/session'
+import type { Me } from './api/session'
 import ThreadHistory from './components/ThreadHistory'
 import { useResearch } from './hooks/useResearch'
 
@@ -22,6 +24,10 @@ export default function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [connectionError, setConnectionError] = useState('')
   const [demo, setDemo] = useState<boolean | null>(null)
+  const [identity, setIdentity] = useState<Me | null>(null)
+  const [identityError, setIdentityError] = useState('')
+  const [authError, setAuthError] = useState(
+    () => new URLSearchParams(window.location.search).get('auth_error') === '1')
   const { turns, error, busy, steps, research, stop, reset, openThread, activeThread,
     canContinue, notice, historyVersion } = useResearch()
   const selectedModel = activeThread?.model ?? model
@@ -42,14 +48,34 @@ export default function App() {
       } catch {
         if (!abort.signal.aborted) setConnectionError('Cannot reach the backend. Start the API on port 8000.')
       }
+      // Identity is optional: demo mode without a database still streams research.
+      try {
+        setIdentity(await loadIdentity(abort.signal))
+      } catch {
+        if (!abort.signal.aborted) setIdentityError('Identity unavailable. Requests may be rejected.')
+      }
     }
     void load()
     return () => abort.abort()
   }, [])
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault()
-    if (query.trim() && selectedModel) { void research(query.trim(), selectedModel); setQuery('') }
+    if (!query.trim() || !selectedModel) return
+    // Close the mount race: an unsafe request needs the session's CSRF token.
+    try { await ensureIdentity() } catch { /* the request surfaces the failure itself */ }
+    void research(query.trim(), selectedModel)
+    setQuery('')
+  }
+
+  async function handleSignOut() {
+    setIdentityError('')
+    try {
+      await signOut()
+      setIdentity(await loadIdentity())
+    } catch {
+      setIdentityError('Sign-out failed. Reload the page and try again.')
+    }
   }
 
   return <ThemeProvider theme={theme} defaultMode="system"><CssBaseline />
@@ -62,10 +88,22 @@ export default function App() {
         <img src="/favicon.svg" alt="" width="48" height="48" />
         <Box sx={{ flex: 1 }}><Typography variant="h4" component="h1" sx={{ fontWeight: 750 }}>Research Agent</Typography>
           <Typography color="text.secondary">Explore the web. Follow the evidence.</Typography></Box>
-        <Chip label="Development" variant="outlined" />
+        {identity?.kind === 'user' && identity.user ?
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            {identity.user.avatar_url && <Box component="img" src={identity.user.avatar_url} alt=""
+              width={32} height={32} sx={{ borderRadius: '50%' }} />}
+            <Typography variant="body2">{identity.user.login}</Typography>
+            <Button size="small" variant="outlined" onClick={() => void handleSignOut()}>Sign out</Button>
+          </Stack> :
+          identity?.login_enabled ?
+            <Button size="small" variant="outlined" href={loginUrl('/')}>Sign in with GitHub</Button> :
+            <Chip label="Development" variant="outlined" />}
       </Stack>
-      <Alert severity="warning" sx={{ mb: 3 }}>Not ready for public deployment. All local requests share one identity — not authenticated. Login and quotas are not implemented.</Alert>
+      <Alert severity="warning" sx={{ mb: 3 }}>Not ready for public deployment. Per-user quotas and abuse protection are not implemented.</Alert>
       {demo === true && <Alert severity="info" sx={{ mb: 3 }}>Demo mode — no paid APIs or real web searches.</Alert>}
+      {authError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setAuthError(false)}>
+        GitHub sign-in did not complete. Please try again.</Alert>}
+      {identityError && <Alert severity="info" sx={{ mb: 2 }}>{identityError}</Alert>}
       {connectionError && <Alert severity="error">{connectionError}</Alert>}
       {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
       {!canContinue && <Button disabled={busy} onClick={() => { reset(); setQuery('') }}>Start a new thread</Button>}

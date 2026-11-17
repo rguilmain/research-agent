@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 import respx
+from auth_fixtures import origin_headers
 from fastapi.testclient import TestClient
 from http_fixtures import responses_stream
 from pydantic import SecretStr
@@ -133,7 +134,7 @@ def test_openai_http_failure_is_redacted_at_sse_boundary(caplog):
     # Client has no open resources until first use, and is closed after TestClient exits.
     client = httpx.AsyncClient()
     service = LiveResearch(settings(), client)
-    with TestClient(create_app(settings(), service)) as app:
+    with TestClient(create_app(settings(), service), headers=origin_headers()) as app:
         response = app.post("/api/v1/research", json={"query": "q"})
         assert app.portal is not None
         app.portal.call(client.aclose)

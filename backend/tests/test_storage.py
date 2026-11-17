@@ -12,13 +12,14 @@ import pytest
 import respx
 from alembic import command
 from alembic.config import Config
-from fastapi.testclient import TestClient
+from auth_fixtures import raw_session_headers, signed_in_client
 from http_fixtures import responses_stream
 from openai import AuthenticationError
 from pydantic import SecretStr
 from sqlalchemy import select, text, update
 from sqlalchemy.engine import make_url
 
+from research_agent.auth import AuthContext, require_csrf
 from research_agent.config import Settings
 from research_agent.db import Database
 from research_agent.guards import RunContext
@@ -67,8 +68,8 @@ async def db(pg_settings, migrated):
         async with database.engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE principals, threads, runs, checkpoints, checkpoint_blobs, "
-                    "checkpoint_writes CASCADE"
+                    "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
+                    "checkpoints, checkpoint_blobs, checkpoint_writes CASCADE"
                 )
             )
         yield database
@@ -262,7 +263,7 @@ def test_live_api_persists_turns_and_usage(pg_settings, migrated):
         ]
     )
     app = create_app(settings)
-    with TestClient(app) as client:
+    with signed_in_client(app) as client:
         first = client.post("/api/v1/research", json={"query": "First API question"})
         events = [
             json.loads(line[6:]) for line in first.text.splitlines() if line.startswith("data:")
@@ -299,7 +300,7 @@ def test_api_run_finalization(pg_settings, migrated, outcome):
 
     settings = pg_settings.model_copy(update={"run_timeout_s": 0.05})
     app = create_app(settings, Service())
-    with TestClient(app) as client:
+    with signed_in_client(app) as client:
         response = client.post("/api/v1/research", json={"query": "question"})
         assert response.status_code == 200
         assert "SECRET" not in response.text
@@ -332,14 +333,17 @@ def test_api_run_finalization(pg_settings, migrated, outcome):
 
 def test_thread_api_owner_checks(pg_settings, migrated):
     app = create_app(pg_settings)
-    with TestClient(app) as client:
+    with signed_in_client(app) as client:
         assert client.get("/readyz").status_code == 200
         assert client.post("/api/v1/threads", json={"model_id": "forbidden"}).status_code == 403
         assert client.post("/api/v1/threads", json={"title": " "}).status_code == 422
         item = client.post("/api/v1/threads", json={}).json()
         tid = item["id"]
         assert client.patch(f"/api/v1/threads/{tid}", json={"title": "Renamed"}).status_code == 200
-        app.dependency_overrides[current_principal] = lambda: Identity(uuid4())
+        # A different owner must not reach this thread through reads or mutations.
+        other = Identity(uuid4())
+        app.dependency_overrides[current_principal] = lambda: other
+        app.dependency_overrides[require_csrf] = lambda: AuthContext(identity=other, kind="user")
         for method, path, body in (
             ("get", f"/api/v1/threads/{tid}", None),
             ("get", f"/api/v1/threads/{tid}/messages", None),
@@ -408,7 +412,7 @@ def test_failed_auto_admission_removes_only_new_empty_thread(
     from sqlalchemy.exc import SQLAlchemyError
 
     app = create_app(pg_settings)
-    with TestClient(app) as client:
+    with signed_in_client(app) as client:
         existing = client.post("/api/v1/threads", json={}).json()["id"]
 
         async def reject(*args):
@@ -426,7 +430,7 @@ def test_failed_auto_admission_removes_only_new_empty_thread(
 
 def test_auto_thread_title_uses_first_query(pg_settings, migrated):
     app = create_app(pg_settings)
-    with TestClient(app) as client:
+    with signed_in_client(app) as client:
         query = "  First   question\n" + "x" * 100
         response = client.post("/api/v1/research", json={"query": query})
         tid = next(
@@ -521,6 +525,12 @@ async def test_real_asgi_disconnect_finalizes_and_releases_thread(db, pg_setting
         "client": ("127.0.0.1", 1234),
     }
     async with app.router.lifespan_context(app):
+        # Raw ASGI scopes bypass TestClient, so the session headers are built by hand.
+        headers = await raw_session_headers(app)
+        scope["headers"] = [
+            (b"content-type", b"application/json"),
+            *[(key.encode(), value.encode()) for key, value in headers.items()],
+        ]
         task = asyncio.create_task(app(scope, receive, send))
         await asyncio.wait_for(started.wait(), 5)
         body = b"".join(message.get("body", b"") for message in messages)
@@ -538,6 +548,7 @@ async def test_real_asgi_disconnect_finalizes_and_releases_thread(db, pg_setting
                     "query": "concurrent",
                     "thread_id": tid,
                 },
+                headers=headers,
             )
             assert response.status_code == 409
         await incoming.put({"type": "http.disconnect"})

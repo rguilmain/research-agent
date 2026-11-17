@@ -1,23 +1,56 @@
-"""Owner-scoped storage and cross-process run exclusion (not authentication)."""
+"""Owner-scoped storage, sessions and cross-process run exclusion."""
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
-from uuid import UUID
+from datetime import datetime, timedelta
+from typing import Any, cast
+from uuid import UUID, uuid4
 
-from sqlalchemy import delete, exists, or_, select, text, update
+from sqlalchemy import CursorResult, delete, exists, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from research_agent.config import Settings
 from research_agent.db import Database
 from research_agent.history import History, public_messages
-from research_agent.storage_models import Principal, Run, Thread, now
+from research_agent.storage_models import AuthSession, OAuthState, Principal, Run, Thread, User, now
+
+SESSION_TOUCH_INTERVAL = timedelta(minutes=1)
+OAUTH_STATE_TTL = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
 class Identity:
     id: UUID
     kind: str = "anonymous"
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    token_hash: str
+    principal_id: UUID
+    kind: str
+    expires_at: datetime
+    login: str | None = None
+    avatar_url: str | None = None
+
+
+@dataclass(frozen=True)
+class OAuthStateRecord:
+    code_verifier: str
+    next_path: str
+
+
+@dataclass(frozen=True)
+class GitHubProfile:
+    github_id: int
+    login: str
+    avatar_url: str | None
+
+
+@dataclass(frozen=True)
+class LoginResult:
+    session: SessionRecord
+    claimed_threads: int
 
 
 class NotFound(Exception):
@@ -294,3 +327,237 @@ class Repository:
             except Conflict:
                 continue
         return count
+
+    async def create_anonymous_session(self, token_hash: str) -> SessionRecord:
+        """Create an anonymous principal and its session for a browser without one."""
+        expires_at = now() + timedelta(hours=self.settings.anon_thread_ttl_hours)
+        async with self.db.sessions.begin() as session:
+            principal = Principal(kind="anonymous")
+            session.add(principal)
+            await session.flush()
+            row = AuthSession(
+                token_hash=token_hash,
+                principal_id=principal.id,
+                kind="anonymous",
+                expires_at=expires_at,
+            )
+            session.add(row)
+            await session.flush()
+            return SessionRecord(
+                token_hash=token_hash,
+                principal_id=principal.id,
+                kind="anonymous",
+                expires_at=expires_at,
+            )
+
+    async def resolve_session(self, token_hash: str) -> SessionRecord | None:
+        """Return a live session, enforcing absolute and idle expiry."""
+        async with self.db.sessions.begin() as session:
+            row = await session.scalar(
+                select(AuthSession).where(AuthSession.token_hash == token_hash)
+            )
+            if row is None or row.revoked_at is not None or row.expires_at <= now():
+                return None
+            login = avatar_url = None
+            if row.kind == "user":
+                user = await session.get(User, row.principal_id)
+                if user is None:
+                    return None
+                idle_deadline = row.last_seen_at + timedelta(
+                    days=self.settings.user_session_idle_days
+                )
+                if idle_deadline <= now():
+                    return None
+                login, avatar_url = user.login, user.avatar_url
+            if now() - row.last_seen_at >= SESSION_TOUCH_INTERVAL:
+                await session.execute(
+                    update(AuthSession).where(AuthSession.id == row.id).values(last_seen_at=now())
+                )
+            return SessionRecord(
+                token_hash=row.token_hash,
+                principal_id=row.principal_id,
+                kind=row.kind,
+                expires_at=row.expires_at,
+                login=login,
+                avatar_url=avatar_url,
+            )
+
+    async def revoke_session(self, token_hash: str) -> None:
+        async with self.db.sessions.begin() as session:
+            await session.execute(
+                update(AuthSession)
+                .where(AuthSession.token_hash == token_hash, AuthSession.revoked_at.is_(None))
+                .values(revoked_at=now())
+            )
+
+    async def create_oauth_state(
+        self, state_hash: str, code_verifier: str, next_path: str, browser_hash: str
+    ) -> None:
+        async with self.db.sessions.begin() as session:
+            session.add(
+                OAuthState(
+                    state_hash=state_hash,
+                    code_verifier=code_verifier,
+                    next_path=next_path,
+                    browser_hash=browser_hash,
+                    expires_at=now() + OAUTH_STATE_TTL,
+                )
+            )
+
+    async def consume_oauth_state(
+        self, state_hash: str, browser_hash: str
+    ) -> OAuthStateRecord | None:
+        """Atomically consume a single-use state; replay and wrong browsers get None."""
+        async with self.db.sessions.begin() as session:
+            row = (
+                await session.execute(
+                    update(OAuthState)
+                    .where(
+                        OAuthState.state_hash == state_hash,
+                        OAuthState.browser_hash == browser_hash,
+                        OAuthState.consumed_at.is_(None),
+                        OAuthState.expires_at > now(),
+                    )
+                    .values(consumed_at=now())
+                    .returning(OAuthState.code_verifier, OAuthState.next_path)
+                )
+            ).first()
+            if row is None:
+                return None
+            return OAuthStateRecord(code_verifier=row.code_verifier, next_path=row.next_path)
+
+    async def login_github_user(
+        self, profile: GitHubProfile, token_hash: str, anonymous: Identity | None
+    ) -> LoginResult:
+        """Attach a GitHub profile to a principal and rotate the browser's session.
+
+        The anonymous session is revoked and its live threads (with their runs) move to
+        the user in one transaction, so nothing is claimed twice or left ownerless.
+        """
+        expires_at = now() + timedelta(days=self.settings.user_session_max_days)
+        async with self.db.sessions.begin() as session:
+            candidate = uuid4()
+            await session.execute(
+                insert(Principal)
+                .values(id=candidate, kind="user")
+                .on_conflict_do_nothing(index_elements=[Principal.id])
+            )
+            stamp = now()
+            principal_id = (
+                await session.execute(
+                    insert(User)
+                    .values(
+                        principal_id=candidate,
+                        github_id=profile.github_id,
+                        login=profile.login,
+                        avatar_url=profile.avatar_url,
+                        created_at=stamp,
+                        last_login_at=stamp,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[User.github_id],
+                        set_={
+                            "login": profile.login,
+                            "avatar_url": profile.avatar_url,
+                            "last_login_at": stamp,
+                        },
+                    )
+                    .returning(User.principal_id)
+                )
+            ).scalar_one()
+            if principal_id != candidate:
+                # A concurrent login won the upsert; drop the principal we just created.
+                await session.execute(delete(Principal).where(Principal.id == candidate))
+
+            claimed = 0
+            if anonymous is not None and anonymous.id != principal_id:
+                thread_ids = (
+                    await session.scalars(
+                        select(Thread.id)
+                        .where(
+                            Thread.owner_id == anonymous.id,
+                            Thread.deleted_at.is_(None),
+                            or_(Thread.expires_at.is_(None), Thread.expires_at > now()),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+                if thread_ids:
+                    await session.execute(
+                        update(Thread)
+                        .where(Thread.id.in_(thread_ids))
+                        .values(
+                            owner_id=principal_id,
+                            expires_at=now() + timedelta(days=self.settings.thread_retention_days),
+                        )
+                    )
+                    await session.execute(
+                        update(Run)
+                        .where(Run.thread_id.in_(thread_ids))
+                        .values(owner_id=principal_id)
+                    )
+                    claimed = len(thread_ids)
+                await session.execute(
+                    update(AuthSession)
+                    .where(
+                        AuthSession.principal_id == anonymous.id,
+                        AuthSession.revoked_at.is_(None),
+                    )
+                    .values(revoked_at=now())
+                )
+
+            session.add(
+                AuthSession(
+                    token_hash=token_hash,
+                    principal_id=principal_id,
+                    kind="user",
+                    expires_at=expires_at,
+                )
+            )
+            return LoginResult(
+                session=SessionRecord(
+                    token_hash=token_hash,
+                    principal_id=principal_id,
+                    kind="user",
+                    expires_at=expires_at,
+                    login=profile.login,
+                    avatar_url=profile.avatar_url,
+                ),
+                claimed_threads=claimed,
+            )
+
+    async def cleanup_identity(self) -> int:
+        """Purge dead sessions, dead OAuth states and anonymous principals with no traces."""
+        removed = 0
+        async with self.db.sessions.begin() as session:
+            for statement in (
+                delete(AuthSession).where(AuthSession.expires_at < now()),
+                delete(OAuthState).where(OAuthState.expires_at < now()),
+            ):
+                result = cast("CursorResult[Any]", await session.execute(statement))
+                removed += result.rowcount or 0
+        stale_principals = (
+            select(Principal.id)
+            .where(
+                Principal.kind == "anonymous",
+                ~exists().where(
+                    AuthSession.principal_id == Principal.id,
+                    AuthSession.revoked_at.is_(None),
+                    AuthSession.expires_at > now(),
+                ),
+                ~exists().where(Thread.owner_id == Principal.id),
+                ~exists().where(User.principal_id == Principal.id),
+            )
+            .limit(100)
+        )
+        async with self.db.sessions.begin() as session:
+            ids = (await session.scalars(stale_principals)).all()
+            if ids:
+                # Remove leftover dead sessions first; the foreign key has no cascade.
+                await session.execute(delete(AuthSession).where(AuthSession.principal_id.in_(ids)))
+                result = cast(
+                    "CursorResult[Any]",
+                    await session.execute(delete(Principal).where(Principal.id.in_(ids))),
+                )
+                removed += result.rowcount or 0
+        return removed

@@ -1,4 +1,5 @@
 import pytest
+from auth_fixtures import origin_headers
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -31,7 +32,7 @@ def test_malformed_service_event_is_never_serialized(caplog):
         async def events(self, query, model_id):
             yield {"type": "token", "text": "ok", "secret": "NEVER-EXPOSE"}
 
-    with TestClient(create_app(Settings(), BadService())) as client:
+    with TestClient(create_app(Settings(), BadService()), headers=origin_headers()) as client:
         response = client.post("/api/v1/research", json={"query": "q"})
     assert '"type": "error"' in response.text
     assert "NEVER-EXPOSE" not in response.text + caplog.text

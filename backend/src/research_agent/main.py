@@ -17,15 +17,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 
 from research_agent import __version__
+from research_agent.auth import AuthContext, AuthError, require_csrf
+from research_agent.auth_api import router as auth_router
 from research_agent.catalog import load_catalog
 from research_agent.config import Settings
 from research_agent.db import Database, configure_event_loop
 from research_agent.events import validate_event
 from research_agent.guards import RunContext, RunLimitExceeded
-from research_agent.repository import Conflict, Identity, NotFound, Repository
+from research_agent.logging import build_log_config
+from research_agent.repository import Conflict, NotFound, Repository
 from research_agent.research import DemoResearch, LiveResearch, ResearchService
 from research_agent.streaming import stream_events
-from research_agent.threads_api import current_principal
 from research_agent.threads_api import router as threads_router
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
     async def lifespan(app: FastAPI):
         async with AsyncExitStack() as stack:
             client = await stack.enter_async_context(httpx.AsyncClient(follow_redirects=False))
+            app.state.http = client
             db = None
             app.state.repository = None
             if config.database_url.get_secret_value():
@@ -75,6 +78,21 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
     app = FastAPI(title="Research Agent", version=__version__, lifespan=lifespan)
     app.state.settings = config
     app.include_router(threads_router)
+    app.include_router(auth_router)
+
+    @app.exception_handler(AuthError)
+    async def auth_error(request: Request, exc: AuthError):
+        return JSONResponse(
+            status_code=exc.status,
+            content={
+                "type": "about:blank",
+                "title": exc.detail,
+                "status": exc.status,
+                "code": exc.code,
+                "request_id": request.state.request_id,
+            },
+            media_type="application/problem+json",
+        )
 
     @app.exception_handler(NotFound)
     async def not_found(_request, _exc):
@@ -114,7 +132,11 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
 
     @app.get("/api/v1/config")
     async def public_config():
-        return {"demo": config.demo_mode, "login_enabled": False, "version": __version__}
+        return {
+            "demo": config.demo_mode,
+            "login_enabled": config.login_enabled,
+            "version": __version__,
+        }
 
     @app.get("/api/v1/models")
     async def models():
@@ -130,8 +152,9 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
     async def research(
         body: ResearchRequest,
         request: Request,
-        owner: Annotated[Identity, Depends(current_principal)],
+        session: Annotated[AuthContext, Depends(require_csrf)],
     ):
+        owner = session.identity
         model_id = body.model_id or config.default_model
         if model_id not in catalog or not catalog[model_id].enabled:
             return JSONResponse(
@@ -282,4 +305,5 @@ def run() -> None:
         host=settings.host,
         port=settings.port,
         loop="research_agent.db:selector_loop_factory",
+        log_config=build_log_config(),
     )

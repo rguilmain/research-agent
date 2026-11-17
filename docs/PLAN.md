@@ -33,6 +33,10 @@
     Verified locally and in CI run 43825899521 (b535d8e). Production DB remains M9.
   - [ ] M3b: history presentation/resume UX, retention scheduling and operational hardening.
     Interrupted threads intentionally require a new thread; no automatic tool replay.
+    - [x] M3b (partial): saved-history API and sidebar, reopening saved threads,
+      query-derived titles, cleanup of newly created empty threads after failed run
+      admission, and a bounded multi-batch cleanup option. Scheduled cleanup and
+      resume stay out of scope. Verified locally only, not in CI yet.
 - [ ] M4: server-side GitHub OAuth (state, PKCE if supported), opaque hashed sessions,
   secure cookies, CSRF, restricted redirects, session rotation/logout, anonymous thread claim.
 - [ ] M5: Turnstile server validation, hashed-IP and cookie quotas, per-user quotas,
@@ -50,6 +54,51 @@
 - [ ] M11: update rag-app README to point to the completed replacement.
 
 ## Next agent: begin here
+
+Historical dependency triage is recorded below. Current next slices:
+
+1. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
+   polish. Resume of interrupted threads remains intentionally unimplemented.
+2. Preferred next substantive slice is M4 (GitHub OAuth, opaque hashed sessions, CSRF,
+   anonymous thread claim), then M5 quotas and atomic budget reservations. Confirm scope
+   before starting.
+3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
+   the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
+   deliberately; never bypass engines.
+4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M3b history/sidebar/cleanup session — November 17, 2026
+
+- Dependency triage: merged #6 (Docker uv 0.13.8) and #8 (uv_build >= 0.13.8) together,
+  then #5 (uvicorn >= 0.54) and #12 (psycopg >= 3.3.9); main CI passed after each merge
+  (observed: 44139913494, 44140109537, 44140305880, plus 44139708672 for #6).
+- #13 (SQLAlchemy >= 2.1.8,<2.2) reviewed in an isolated git worktree: locked sync, Ruff,
+  pyright and all 90 tests passed against a dedicated `_test` database including the
+  migration up/down/up and checkpoint-idempotency test, so it was merged after CI.
+- #11 (jsdom 31.0.1) left open and explained on the PR: jsdom 31 requires Node
+  `^22.22.2 || ^24.15.0 || >=26`, but local and documented baseline is Node 22.14.0.
+- Implemented: `GET /api/v1/threads/{id}/messages` (owner-scoped, 404 for unknown,
+  foreign, deleted or expired threads), transcript projection that exposes only user
+  questions and each turn's final assistant text with turn-local structured sources,
+  query-derived thread titles, deletion of a newly created thread when run admission
+  fails (conflict/storage), empty-thread TTL purge, and `research-agent-cleanup
+  --max-batches 1..50`.
+- Private data is never exposed by the history endpoint: system prompts, reasoning,
+  tool-call arguments, raw tool output and full checkpoint channel state are excluded;
+  running/unfinished threads return no transcript with `can_continue=false`. Verified by
+  unit and API tests asserting the string "SECRET" never reaches the projection.
+- Frontend: thread sidebar (permanent desktop / temporary mobile) with list, rename,
+  delete confirmation and paging; multi-turn conversation rendering; model locked while a
+  saved thread is open; explicit "Start a new thread" state when `can_continue` is false;
+  Markdown is now lazily imported, which removed the >500 kB bundle warning.
+- Local checks observed: backend `uv sync --locked`, Ruff check/format, pyright and 97
+  tests passed with `REQUIRE_PG=1` (93% coverage); frontend `npm ci`, lint, typecheck, 21
+  tests and build passed; production `npm audit` clean; `scripts/smoke-docker.ps1` passed
+  (non-root, packaged catalog/migrations, no `/app` `.env`, HTTP health, demo SSE).
+- No live provider calls, no keys, no paid infrastructure, no deployment. Production
+  startup remains blocked. Retention cleanup scheduling and thread resume remain open.
+
+## Access and model policy to implement
 
 1. M3a landed in 9cbb7fb with cross-platform lint fix b535d8e; CI run 43825899521 passed.
    Run all AGENTS.md checks again before further implementation.

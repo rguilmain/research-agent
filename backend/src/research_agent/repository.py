@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from research_agent.config import Settings
 from research_agent.db import Database
+from research_agent.history import History, public_messages
 from research_agent.storage_models import Principal, Run, Thread, now
 
 
@@ -105,6 +106,52 @@ class Repository:
                 thread.title = title
             thread.updated_at = now()
             return thread_view(thread)
+
+    async def discard_empty_thread(self, owner: Identity, thread_id: UUID) -> None:
+        """Only delete an owned thread with no admitted runs; safe after admission failure."""
+        async with self.db.sessions.begin() as session:
+            thread = await session.scalar(self.owned(owner, thread_id).with_for_update())
+            if thread is not None and not await session.scalar(
+                select(exists().where(Run.thread_id == thread_id))
+            ):
+                await session.delete(thread)
+
+    async def messages(self, owner: Identity, thread_id: UUID) -> History:
+        thread = await self.get_thread(owner, thread_id)
+        items: list = []
+        truncated = False
+        # No advisory lock: this is a read-only projection, and an in-flight run is
+        # reported instead of being blocked or blocking the stream.
+        async with self.db.sessions() as session:
+            status = await session.scalar(
+                select(Run.status)
+                .where(Run.thread_id == thread_id)
+                .order_by(Run.created_at.desc(), Run.id.desc())
+                .limit(1)
+            )
+            busy = await session.scalar(
+                select(exists().where(Run.thread_id == thread_id, Run.status == "running"))
+            )
+        settled = status == "completed" and not busy
+        if settled and not thread["demo"]:
+            checkpoint = await self.db.checkpointer.aget_tuple(
+                {"configurable": {"thread_id": str(thread_id)}}
+            )
+            if checkpoint:
+                items, truncated = public_messages(
+                    checkpoint.checkpoint.get("channel_values", {}).get("messages", [])
+                )
+        return History.model_validate(
+            dict(
+                items=items,
+                status="running" if busy else (status or "idle"),
+                can_continue=(
+                    settled and not thread["demo"] and thread["demo"] == self.settings.demo_mode
+                ),
+                demo=thread["demo"],
+                truncated=truncated,
+            )
+        )
 
     @asynccontextmanager
     async def thread_lock(self, thread_id: UUID):
@@ -219,6 +266,11 @@ class Repository:
                             Thread.expires_at < now(),
                             Thread.deleted_at
                             < now() - timedelta(days=self.settings.thread_retention_days),
+                            (
+                                Thread.created_at
+                                < now() - timedelta(hours=self.settings.empty_thread_ttl_hours)
+                            )
+                            & ~exists().where(Run.thread_id == Thread.id),
                         )
                     )
                     .limit(100)

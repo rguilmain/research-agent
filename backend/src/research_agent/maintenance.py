@@ -1,5 +1,6 @@
 """Explicit local/release schema setup and bounded retention cleanup commands."""
 
+import argparse
 import asyncio
 from pathlib import Path
 
@@ -38,19 +39,29 @@ def migrate() -> None:
     print("Application and checkpoint migrations complete")
 
 
-async def cleanup_database():
+async def cleanup_database(max_batches: int = 1):
     settings = Settings()
     if not settings.database_url.get_secret_value():
         raise ValueError("DATABASE_URL required")
     db = Database(settings)
     async with db.open():
-        return await Repository(db, settings).cleanup()
+        repo = Repository(db, settings)
+        total = 0
+        for _ in range(max_batches):
+            count = await repo.cleanup()
+            total += count
+            if count == 0:
+                break
+        return total
 
 
 def cleanup() -> None:
+    parser = argparse.ArgumentParser(description="Bounded retention cleanup")
+    parser.add_argument("--max-batches", type=int, choices=range(1, 51), default=1)
+    args = parser.parse_args()
     configure_event_loop()
     try:
-        count = asyncio.run(cleanup_database())
+        count = asyncio.run(cleanup_database(args.max_batches))
     except Exception:
         raise SystemExit("Database cleanup failed") from None
-    print(f"Removed {count} expired/deleted threads (batch limit 100)")
+    print(f"Removed {count} expired/deleted/empty threads (maximum {args.max_batches} batches)")

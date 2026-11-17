@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useResearch } from './useResearch'
 
@@ -9,6 +9,12 @@ function response(events: unknown[]) {
     controller.close()
   } }), { status: 200 })
 }
+const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
+const thread = { id, title: 'Saved question', model_id: 'model-a', demo: false,
+  created_at: '2026-11-16T00:00:00Z', updated_at: '2026-11-16T00:00:00Z', expires_at: null }
+const history = { items: [{ role: 'user', text: 'Saved question', sources: [] },
+  { role: 'assistant', text: 'Saved answer', sources: [{ url: 'https://example.org', title: 'Evidence' }] }],
+  status: 'completed', can_continue: true, demo: false, truncated: false }
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -31,6 +37,40 @@ describe('thread continuity', () => {
     act(() => result.current.reset())
     await ask('model-b')
     expect(JSON.parse(fetch.mock.calls[3][1].body)).not.toHaveProperty('thread_id')
+  })
+
+  it('opens saved history, exposes turns, and blocks continuation when not allowed', async () => {
+    const fetch = vi.fn().mockResolvedValue(json(history))
+    vi.stubGlobal('fetch', fetch)
+    const { result } = renderHook(() => useResearch())
+    await act(async () => { await result.current.openThread(thread) })
+    expect(result.current.turns).toHaveLength(2)
+    expect(result.current.answer).toBe('Saved answer')
+    expect(result.current.sources[0].url).toBe('https://example.org')
+    expect(result.current.canContinue).toBe(true)
+    fetch.mockReset()
+    fetch.mockResolvedValueOnce(json({ ...history, status: 'cancelled', can_continue: false }))
+    await act(async () => { await result.current.openThread(thread) })
+    expect(result.current.canContinue).toBe(false)
+    expect(result.current.notice).toContain('cancelled')
+    await act(async () => { await result.current.research('blocked', 'model-a') })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    act(() => result.current.reset())
+    expect(result.current.turns).toEqual([])
+    expect(result.current.activeThread).toBeNull()
+    expect(result.current.canContinue).toBe(true)
+    fetch.mockResolvedValueOnce(response([{ type: 'done' }]))
+    await act(async () => { await result.current.research('allowed', 'model-a') })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports an unreadable history without leaving stale turns', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 404 })))
+    const { result } = renderHook(() => useResearch())
+    await act(async () => { await result.current.openThread(thread) })
+    await waitFor(() => expect(result.current.error).toContain('404'))
+    expect(result.current.turns).toEqual([])
+    expect(result.current.busy).toBe(false)
   })
 
   it('discards interrupted threads instead of automatically replaying them', async () => {

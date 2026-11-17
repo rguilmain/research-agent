@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr("")
     thread_retention_days: int = 30
     anon_thread_ttl_hours: int = 24
+    empty_thread_ttl_hours: int = 1
 
     @model_validator(mode="after")
     def validate_database(self) -> "Settings":
@@ -44,7 +45,10 @@ class Settings(BaseSettings):
                 valid = False
             if not valid:
                 raise ValueError("DATABASE_URL must be a PostgreSQL URL with host and database")
-        if min(self.thread_retention_days, self.anon_thread_ttl_hours) <= 0:
+        if (
+            min(self.thread_retention_days, self.anon_thread_ttl_hours, self.empty_thread_ttl_hours)
+            <= 0
+        ):
             raise ValueError("Retention limits must be positive")
         return self
 

@@ -182,6 +182,16 @@ async def test_actual_checkpoint_roundtrip_across_services(db, pg_settings, owne
             assert events[-1] == {"type": "done"}
             await repo.finish_run(rid, "completed")
     request = json.loads(route.calls[1].request.content)
+    history = await repo.messages(owner, tid)
+    assert history.can_continue and history.status == "completed" and not history.demo
+    assert [item.text for item in history.items] == [
+        "First question",
+        "First answer",
+        "Follow-up question",
+        "Follow-up answer",
+    ]
+    with pytest.raises(NotFound):
+        await repo.messages(Identity(uuid4()), tid)
     assert "First question" in json.dumps(request["input"])
     assert "First answer" in json.dumps(request["input"])
     async with db.sessions() as session:
@@ -332,6 +342,7 @@ def test_thread_api_owner_checks(pg_settings, migrated):
         app.dependency_overrides[current_principal] = lambda: Identity(uuid4())
         for method, path, body in (
             ("get", f"/api/v1/threads/{tid}", None),
+            ("get", f"/api/v1/threads/{tid}/messages", None),
             ("patch", f"/api/v1/threads/{tid}", {"title": "Stolen"}),
             ("delete", f"/api/v1/threads/{tid}", None),
             ("post", "/api/v1/research", {"query": "q", "thread_id": tid}),
@@ -339,8 +350,92 @@ def test_thread_api_owner_checks(pg_settings, migrated):
             assert client.request(method, path, json=body).status_code == 404
         assert client.get("/api/v1/threads").json() == {"items": []}
         app.dependency_overrides.clear()
+        history = client.get(f"/api/v1/threads/{tid}/messages").json()
+        assert history == {
+            "items": [],
+            "status": "idle",
+            "can_continue": False,
+            "demo": True,
+            "truncated": False,
+        }
         assert client.delete(f"/api/v1/threads/{tid}").status_code == 204
         assert client.get(f"/api/v1/threads/{tid}").status_code == 404
+        assert client.get(f"/api/v1/threads/{tid}/messages").status_code == 404
+
+
+async def test_history_running_failed_expired_and_unknown(db, pg_settings, owner):
+    settings = pg_settings.model_copy(update={"demo_mode": False})
+    repo = Repository(db, settings)
+    tid = (await repo.create_thread(owner, "gpt-6-luna"))["id"]
+    # An in-flight run is reported without taking the stream lock or reading checkpoints.
+    rid = await repo.start_run(owner, tid, "gpt-6-luna")
+    history = await repo.messages(owner, tid)
+    assert history.status == "running" and not history.can_continue and not history.items
+    await repo.finish_run(rid, "failed")
+    history = await repo.messages(owner, tid)
+    assert history.status == "failed" and not history.items and not history.can_continue
+    async with db.sessions.begin() as session:
+        await session.execute(update(Thread).where(Thread.id == tid).values(expires_at=now()))
+    for unknown in (tid, uuid4()):
+        with pytest.raises(NotFound):
+            await repo.messages(owner, unknown)
+
+
+async def test_cleanup_empty_threads_and_owner_scoped_admission_rollback(db, pg_settings, owner):
+    repo = Repository(db, pg_settings)
+    tid = (await repo.create_thread(owner, "gpt-6-luna"))["id"]
+    await repo.discard_empty_thread(Identity(uuid4()), tid)
+    assert await repo.get_thread(owner, tid)
+    assert await repo.cleanup() == 0
+    async with db.sessions.begin() as session:
+        await session.execute(
+            update(Thread).where(Thread.id == tid).values(created_at=now() - timedelta(hours=2))
+        )
+    async with repo.thread_lock(tid):
+        assert await repo.cleanup() == 0
+    assert await repo.cleanup() == 1
+    tid = (await repo.create_thread(owner, "gpt-6-luna"))["id"]
+    rid = await repo.start_run(owner, tid, "gpt-6-luna")
+    await repo.finish_run(rid, "completed")
+    await repo.discard_empty_thread(owner, tid)
+    assert await repo.get_thread(owner, tid)
+
+
+@pytest.mark.parametrize("failure", ["conflict", "storage"])
+def test_failed_auto_admission_removes_only_new_empty_thread(
+    pg_settings, migrated, monkeypatch, failure
+):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    app = create_app(pg_settings)
+    with TestClient(app) as client:
+        existing = client.post("/api/v1/threads", json={}).json()["id"]
+
+        async def reject(*args):
+            if failure == "conflict":
+                raise Conflict("Thread is busy")
+            raise SQLAlchemyError("SECRET")
+
+        monkeypatch.setattr(app.state.repository, "start_run", reject)
+        before = client.get("/api/v1/threads").json()
+        response = client.post("/api/v1/research", json={"query": "a question"})
+        assert response.status_code == (409 if failure == "conflict" else 503)
+        assert client.get("/api/v1/threads").json() == before
+        assert client.get(f"/api/v1/threads/{existing}").status_code == 200
+
+
+def test_auto_thread_title_uses_first_query(pg_settings, migrated):
+    app = create_app(pg_settings)
+    with TestClient(app) as client:
+        query = "  First   question\n" + "x" * 100
+        response = client.post("/api/v1/research", json={"query": query})
+        tid = next(
+            json.loads(line[6:])["thread_id"]
+            for line in response.text.splitlines()
+            if line.startswith("data:") and '"type": "thread"' in line
+        )
+        item = client.get(f"/api/v1/threads/{tid}").json()
+        assert item["title"] == ("First question " + "x" * 100)[:80]
 
 
 @pytest.mark.parametrize("disconnect", [False, True])

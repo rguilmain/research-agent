@@ -82,6 +82,9 @@ Do not enable expensive models before the budget-reservation milestone.
 - Offline backend/frontend tests, linting, type checks, committed lockfiles, CI.
 - PostgreSQL migrations, owner-scoped thread CRUD, cross-process per-thread run exclusion,
   durable usage/status records, checkpointed live multi-turn research, and retention cleanup.
+- Saved-history browsing: an owner-scoped transcript endpoint, a visible thread sidebar with
+  rename/delete, reopening saved threads, live query-derived titles, and automatic cleanup of
+  empty threads left by failed run admission.
 
 ## Planned launch features
 

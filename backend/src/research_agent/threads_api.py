@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from research_agent.catalog import load_catalog
+from research_agent.history import History
 from research_agent.repository import Identity, Repository
 
 router = APIRouter(prefix="/api/v1/threads")
@@ -78,6 +79,11 @@ async def get_thread(thread_id: UUID, owner: Owner, repo: Storage):
 @router.patch("/{thread_id}")
 async def patch_thread(thread_id: UUID, body: ThreadPatch, owner: Owner, repo: Storage):
     return await repo.change_thread(owner, thread_id, body.title)
+
+
+@router.get("/{thread_id}/messages", response_model=History)
+async def get_messages(thread_id: UUID, owner: Owner, repo: Storage):
+    return await repo.messages(owner, thread_id)
 
 
 @router.delete("/{thread_id}", status_code=204)

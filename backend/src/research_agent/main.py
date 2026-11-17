@@ -151,14 +151,22 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
         run_id = None
         lock = AsyncExitStack()
         if repo:
-            if thread_id is None:
-                thread_id = (await repo.create_thread(owner, model_id))["id"]
-            await repo.get_thread(owner, thread_id)
+            created = thread_id is None
             try:
+                if thread_id is None:
+                    thread_id = (
+                        await repo.create_thread(owner, model_id, " ".join(body.query.split())[:80])
+                    )["id"]
+                await repo.get_thread(owner, thread_id)
                 await lock.enter_async_context(repo.thread_lock(thread_id))
                 run_id = await repo.start_run(owner, thread_id, model_id)
             except BaseException:
-                await lock.aclose()
+                with CancelScope(shield=True):
+                    try:
+                        if created and thread_id is not None:
+                            await repo.discard_empty_thread(owner, thread_id)
+                    finally:
+                        await lock.aclose()
                 raise
         elif thread_id is not None:
             raise HTTPException(503, "Persistence is not configured")

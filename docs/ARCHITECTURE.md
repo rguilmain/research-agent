@@ -83,7 +83,13 @@ Every metadata query is owner-scoped; unknown/foreign/deleted/expired resources 
 identity until M4. No client-provided owner ID is accepted. Production remains blocked.
 Threads fix their model and demo/live mode at creation. Demo run metadata is explicitly
 marked, but demo answers are never checkpointed. GET thread returns metadata only, not
-raw checkpoint state, reasoning or tool arguments. History rendering remains M3b/M6.
+raw checkpoint state, reasoning or tool arguments. GET /threads/{id}/messages projects a
+bounded, owner-scoped transcript: user questions plus each turn's final assistant text
+blocks, with sources re-derived from that turn's structured tool evidence. Private
+fields (system prompts, reasoning, tool arguments, raw tool output, checkpoint channel
+state) are never serialized; a running or unfinished thread yields no transcript and
+reports can_continue=false. Auto-created threads take their title from the first query.
+History rendering remains M6; resume is not implemented.
 
 A dedicated SQL connection holds a session advisory lock per thread while streaming;
 row locks and a unique active-run index additionally serialize run admission. Conflicts
@@ -103,9 +109,12 @@ reconciliation is not solved by this token ledger and remains a production block
 Anonymous thread expiry defaults to 24 hours from creation; user-kind retention defaults
 to 30 days. Access expires immediately, while physical deletion requires the explicit
 cleanup command. Soft-deleted threads are purged after the retention interval (anonymous
-expiry may purge earlier). Cleanup skips active/locked threads, deletes checkpoint state
-first, then metadata/runs; a crash between these steps is safe to retry. Cleanup is not
-scheduled and must be run repeatedly for backlogs. Conversation/tool/checkpoint content
+expiry may purge earlier). Threads with no runs at all are also purged after a short
+`EMPTY_THREAD_TTL_HOURS` grace period, which removes threads left behind by failed run
+admission. Cleanup skips active/locked threads, deletes checkpoint state first, then
+metadata/runs; a crash between these steps is safe to retry. Cleanup is not scheduled and
+must be run repeatedly for backlogs; `--max-batches` (1-50) drains more than 100 per
+invocation. Conversation/tool/checkpoint content
 is private retained data, not logs; encryption, formal retention policy, real identity and
 deployment backup/deletion guarantees remain launch work. PostgreSQL test databases must
 end in `_test`; tests truncate only that dedicated database. CI requires these tests.

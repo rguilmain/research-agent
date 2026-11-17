@@ -47,8 +47,9 @@
   shared SQL rate limits and concurrency limits, global budget reservations and settlement.
   - [x] M5a: shared PostgreSQL fixed-window admission limits keyed by hashed client address,
     session principal and login start, returning 429 problem JSON with `Retry-After` before
-    any row is created. Verified locally only (not yet committed or CI-verified). Turnstile,
-    daily quotas, the `quota` SSE event, concurrency caps and budget reservations remain open.
+    any row is created. Landed as commit `5eca4cb`; CI run `44187038198` observed successful
+    (backend with REQUIRE_PG=1, frontend, Docker smoke). Turnstile, daily quotas, the `quota`
+    SSE event, concurrency caps and budget reservations remain open.
 - [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
   sign-in, Turnstile, persisted theme, accessibility and privacy/data deletion screens.
 - [ ] M7: same-origin production static serving, non-root multi-stage Docker image,
@@ -65,25 +66,23 @@
 
 Historical dependency triage is recorded below. Current next slices:
 
-M4a is landed (commit `2d59afc`; CI run `44181979216` observed successful). M5a is
-implemented locally and uncommitted.
+M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful) and so is M5a
+(commit `5eca4cb`, CI run `44187038198` observed successful).
 
-1. Land M5a: rerun `REQUIRE_PG=1` pytest against a `_test` database plus
-   `scripts/smoke-docker.ps1`, commit, push and observe CI. Never claim CI success unobserved.
-2. M5b: Turnstile server validation (`TURNSTILE_SECRET_KEY`) with the browser widget, the
+1. M5b: Turnstile server validation (`TURNSTILE_SECRET_KEY`) with the browser widget, the
    `quota` SSE event and the daily quotas in "Access and model policy to implement".
-3. M5c: shared concurrency caps and the global daily budget with atomic reservations and
+2. M5c: shared concurrency caps and the global daily budget with atomic reservations and
    settlement, including SDK retries.
-4. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
+3. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
    polish. Resume of interrupted threads remains intentionally unimplemented.
-5. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
+4. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
-6. Keep README truthful; a demo foundation is not a production-ready application.
+5. Keep README truthful; a demo foundation is not a production-ready application.
 
 ### M5a rate limiting session — November 17, 2026
 
-- Implemented (uncommitted): migration `0003_rate_limits` (`rate_limit_counters` keyed by
+- Implemented (commit `5eca4cb`): migration `0003_rate_limits` (`rate_limit_counters` keyed by
   scope + hashed key + aligned hour window, `count >= 0` check); `ratelimit.py` (trusted-proxy
   aware `client_ip`, HMAC `ip_key`/`principal_key`, hour `window_start`, `CounterStore`
   protocol, `enforce`, `RateLimitExceeded`); `Repository.consume_rate_limit` (single
@@ -109,8 +108,10 @@ implemented locally and uncommitted.
   skipped; `REQUIRE_PG=1` pytest 169 passed (87% coverage, `ratelimit.py` 100%);
   frontend lint, typecheck, 34 tests and build passed (bundle 495 kB, no warning);
   `scripts/smoke-docker.ps1` passed with the new packaged-migration assertion.
-- NOT verified: CI, a live Fly ingress (proxy-header trust is untested against real edge
-  headers), any live provider call. No dependency changes, so no `npm ci`/locked re-sync.
+  CI run `44187038198` on `5eca4cb` observed successful (backend with REQUIRE_PG=1,
+  frontend, docker-smoke).
+- NOT verified: a live Fly ingress (proxy-header trust is untested against real edge
+  headers) and any live provider call. No dependency changes, so no `npm ci`/locked re-sync.
 - Blockers/limitations: Turnstile, daily quotas, the `quota` SSE event, concurrency caps and
   monetary reservations are still missing; cleanup remains manual; production stays blocked.
 

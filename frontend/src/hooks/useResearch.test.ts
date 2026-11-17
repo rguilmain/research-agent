@@ -99,4 +99,25 @@ describe('thread continuity', () => {
     await act(async () => { await result.current.research('retry', 'model') })
     expect(JSON.parse(fetch.mock.calls[1][1].body)).not.toHaveProperty('thread_id')
   })
+
+  it('records the remaining daily allowance from the quota event', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response([
+      { type: 'thread', thread_id: id }, { type: 'quota', limit: 3, remaining: 1 },
+      { type: 'token', text: 'Answer' }, { type: 'done' },
+    ])))
+    const { result } = renderHook(() => useResearch())
+    expect(result.current.quota).toBeNull()
+    await act(async () => { await result.current.research('question', 'model-a') })
+    expect(result.current.quota).toEqual({ limit: 3, remaining: 1 })
+    expect(result.current.error).toBe('')
+  })
+
+  it('explains a daily quota refusal using the problem code', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ type: 'about:blank', title: 'Daily quota exceeded', status: 429,
+        code: 'quota_exceeded', request_id: 'r' }), { status: 429 })))
+    const { result } = renderHook(() => useResearch())
+    await act(async () => { await result.current.research('question', 'model-a') })
+    await waitFor(() => expect(result.current.error).toContain('Daily question limit reached'))
+  })
 })

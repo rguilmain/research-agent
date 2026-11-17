@@ -42,6 +42,8 @@ def pg_settings():
         rate_limit_anon_session_per_hour=2,
         rate_limit_research_per_hour=1,
         rate_limit_login_per_hour=1,
+        quota_anon_daily=1000,
+        quota_user_daily=1000,
     )
 
 
@@ -69,7 +71,8 @@ async def db(pg_settings, migrated):
             await connection.execute(
                 text(
                     "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
-                    "rate_limit_counters, checkpoints, checkpoint_blobs, checkpoint_writes CASCADE"
+                    "rate_limit_counters, quota_usage, checkpoints, checkpoint_blobs, "
+                    "checkpoint_writes CASCADE"
                 )
             )
         yield database

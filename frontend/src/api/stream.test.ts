@@ -21,6 +21,13 @@ describe('SSE parser', () => {
     const event = { type: 'thread', thread_id: '00000000-0000-4000-8000-000000000001' }
     expect(validateEvent(event)).toEqual(event)
   })
+  it('validates the quota allowance and rejects impossible totals', () => {
+    const event = { type: 'quota', limit: 3, remaining: 2 }
+    expect(validateEvent(event)).toEqual(event)
+    expect(() => validateEvent({ ...event, remaining: 4 })).toThrow()
+    expect(() => validateEvent({ ...event, limit: 0, remaining: 0 })).toThrow()
+    expect(() => validateEvent({ ...event, extra: 1 })).toThrow()
+  })
   it('handles split frames, CRLF, keepalive comments, and multibyte text', async () => {
     const bytes = new TextEncoder().encode(': heartbeat\r\n\r\ndata: {"type":"token","text":"café"}\r\n\r\ndata: {"type":"done"}\n\n')
     const stream = new ReadableStream<Uint8Array>({ start(controller) {

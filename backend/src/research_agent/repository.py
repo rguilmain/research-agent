@@ -2,11 +2,11 @@
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import CursorResult, delete, exists, or_, select, text, update
+from sqlalchemy import CursorResult, delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from research_agent.config import Settings
@@ -16,6 +16,7 @@ from research_agent.storage_models import (
     AuthSession,
     OAuthState,
     Principal,
+    QuotaUsage,
     RateLimitCounter,
     Run,
     Thread,
@@ -70,6 +71,12 @@ class NotFound(Exception):
 
 
 class Conflict(Exception):
+    pass
+
+
+class _QuotaRefused(Exception):
+    """Internal marker: a quota key is full, so the whole consume must roll back."""
+
     pass
 
 
@@ -387,6 +394,69 @@ class Repository:
             )
             return result.rowcount or 0
 
+    async def consume_quota(
+        self, day: date, keys: list[tuple[str, str]], units: int, limit: int
+    ) -> int | None:
+        """Add units to every key atomically, or change nothing when any key is full.
+
+        Returns the smallest remaining allowance across the keys, or ``None`` when the
+        request is refused. A refused request leaves every counter untouched, so a caller
+        who runs out of quota is never charged for it. Keys are processed in sorted order
+        so concurrent requests sharing keys cannot deadlock.
+        """
+        if units > limit:
+            return None
+        try:
+            async with self.db.sessions.begin() as session:
+                remaining = limit
+                for scope, key in sorted(keys):
+                    statement = (
+                        insert(QuotaUsage)
+                        .values(scope=scope, key_hash=key, day=day, units=units, updated_at=now())
+                        .on_conflict_do_update(
+                            index_elements=[
+                                QuotaUsage.scope,
+                                QuotaUsage.key_hash,
+                                QuotaUsage.day,
+                            ],
+                            set_={"units": QuotaUsage.units + units, "updated_at": now()},
+                            where=QuotaUsage.units + units <= limit,
+                        )
+                        .returning(QuotaUsage.units)
+                    )
+                    used = (await session.execute(statement)).scalar_one_or_none()
+                    if used is None:
+                        # Roll back increments already made to earlier keys in this block.
+                        raise _QuotaRefused
+                    remaining = min(remaining, limit - used)
+        except _QuotaRefused:
+            return None
+        return remaining
+
+    async def refund_quota(self, day: date, keys: list[tuple[str, str]], units: int) -> None:
+        """Return units after a request failed before it produced any work."""
+        async with self.db.sessions.begin() as session:
+            for scope, key in sorted(keys):
+                await session.execute(
+                    update(QuotaUsage)
+                    .where(
+                        QuotaUsage.scope == scope,
+                        QuotaUsage.key_hash == key,
+                        QuotaUsage.day == day,
+                    )
+                    .values(units=func.greatest(QuotaUsage.units - units, 0), updated_at=now())
+                )
+
+    async def cleanup_quotas(self) -> int:
+        """Delete quota days older than yesterday (UTC); safe to run repeatedly."""
+        cutoff = now().date() - timedelta(days=1)
+        async with self.db.sessions.begin() as session:
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(delete(QuotaUsage).where(QuotaUsage.day < cutoff)),
+            )
+            return result.rowcount or 0
+
     async def create_anonymous_session(self, token_hash: str) -> SessionRecord:
         """Create an anonymous principal and its session for a browser without one."""
         expires_at = now() + timedelta(hours=self.settings.anon_thread_ttl_hours)
@@ -621,4 +691,5 @@ class Repository:
                 removed += result.rowcount or 0
         # Counters expire on their own schedule and must never accumulate without bound.
         removed += await self.cleanup_rate_limits()
+        removed += await self.cleanup_quotas()
         return removed

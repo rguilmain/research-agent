@@ -75,6 +75,18 @@ class Usage(Event):
         return self
 
 
+class Quota(Event):
+    type: Literal["quota"]
+    limit: Annotated[int, Field(ge=1, le=1_000_000)]
+    remaining: Annotated[int, Field(ge=0, le=1_000_000)]
+
+    @model_validator(mode="after")
+    def validate_remaining(self) -> "Quota":
+        if self.remaining > self.limit:
+            raise ValueError("Invalid quota allowance")
+        return self
+
+
 class Done(Event):
     type: Literal["done"]
 
@@ -88,7 +100,7 @@ class Error(Event):
 
 EVENT_ADAPTER = TypeAdapter(
     Annotated[
-        RunStarted | ThreadEvent | Token | Step | Sources | Usage | Done | Error,
+        RunStarted | ThreadEvent | Token | Step | Sources | Usage | Quota | Done | Error,
         Field(discriminator="type"),
     ]
 )

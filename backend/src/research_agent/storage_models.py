@@ -1,12 +1,13 @@
 """Application-owned metadata, separate from LangGraph's versioned checkpoint schema."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -108,6 +109,27 @@ class RateLimitCounter(Base):
     key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class QuotaUsage(Base):
+    """One daily weighted-unit counter per scope and hashed key.
+
+    Keys are HMACs of a principal or client address: raw identities are never stored.
+    A single conditional upsert adds units only when they still fit, so parallel workers
+    can neither lose an increment nor over-admit. It is deliberately separate from
+    ``rate_limit_counters`` because hourly rate-limit cleanup would erase a live day.
+    """
+
+    __tablename__ = "quota_usage"
+    __table_args__ = (
+        CheckConstraint("units >= 0"),
+        Index("ix_quota_usage_day", "day"),
+    )
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    units: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

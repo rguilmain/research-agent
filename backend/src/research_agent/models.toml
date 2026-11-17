@@ -1,11 +1,15 @@
 # UNVERIFIED informational estimates, not implemented spending controls.
 # Verify prices and account access before enabling additional models.
+# quota_weight is a policy weight charged against the daily question quota, not a cost.
+# Only models with anonymous = true may be selected by anonymous callers.
 [[models]]
 id = "gpt-6-luna"
 label = "GPT-6 Luna"
 input_usd_per_mtok = "0.10"
 output_usd_per_mtok = "0.50"
 enabled = true
+quota_weight = 1
+anonymous = true
 
 [[models]]
 id = "gpt-6.1-terra"
@@ -13,6 +17,7 @@ label = "GPT-6.1 Terra"
 input_usd_per_mtok = "1.00"
 output_usd_per_mtok = "5.00"
 enabled = false
+quota_weight = 3
 
 [[models]]
 id = "gpt-6.1-sol"
@@ -20,3 +25,4 @@ label = "GPT-6.1 Sol"
 input_usd_per_mtok = "2.00"
 output_usd_per_mtok = "10.00"
 enabled = false
+quota_weight = 5

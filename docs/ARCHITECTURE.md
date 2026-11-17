@@ -106,7 +106,20 @@ otherwise the rightmost `X-Forwarded-For` hop, the only entry a client cannot fo
 single trusted ingress. That assumption must be re-verified against the real Fly ingress in
 M9. A process without a database is not limited, which is development-only behavior. Known
 limits: fixed windows allow a brief boundary burst and address limits do not stop distributed
-abuse; Turnstile, daily quotas and monetary reservations remain M5.
+abuse; Turnstile and monetary reservations remain M5.
+
+Daily quotas (M5b-1): `quota_usage` holds one weighted-unit counter per scope, HMAC key and
+UTC day. A conditional upsert (`... WHERE units + n <= limit RETURNING units`) adds units
+only when they fit, so a refused question consumes nothing, and all keys for one question are
+charged in a single transaction that rolls back together. Anonymous callers are charged per
+session **and** per hashed address; signed-in callers per principal. Weight and tier come from
+the model catalog (`quota_weight` Luna 1 / Terra 3 / Sol 5; only `anonymous = true` models are
+selectable anonymously). Quota is charged after the M5a rate limits and before any thread row;
+a request refused during admission is refunded, but a run that fails after admission is not.
+Refusals return 429 `problem+json` (`code: quota_exceeded`) with `Retry-After` in seconds until
+the next UTC midnight, and an accepted run emits a bounded `quota` SSE event reporting the
+remaining allowance. This is a policy limiter, not a monetary reservation; the global daily
+budget with atomic reservations, Turnstile and concurrency caps remain M5.
 Threads fix their model and demo/live mode at creation. Demo run metadata is explicitly
 marked, but demo answers are never checkpointed. GET thread returns metadata only, not
 raw checkpoint state, reasoning or tool arguments. GET /threads/{id}/messages projects a

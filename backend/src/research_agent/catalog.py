@@ -15,6 +15,10 @@ class ModelSpec(BaseModel):
     output_usd_per_mtok: Decimal = Field(ge=0)
     cached_input_usd_per_mtok: Decimal | None = Field(default=None, ge=0)
     enabled: bool
+    # Daily quota units charged per question; a policy weight, not a cost estimate.
+    quota_weight: int = Field(default=1, ge=1, le=100)
+    # Anonymous callers may select only models marked anonymous.
+    anonymous: bool = False
 
 
 def estimate_model_cost(

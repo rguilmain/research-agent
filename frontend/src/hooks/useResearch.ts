@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { describeFailure } from '../api/errors'
+import { describeFailure, problemCode } from '../api/errors'
 import { csrfHeaders } from '../api/session'
 import { readEvents } from '../api/stream'
 import { getMessages } from '../api/threads'
@@ -10,6 +10,7 @@ export function useResearch() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [steps, setSteps] = useState<string[]>([])
+  const [quota, setQuota] = useState<{ limit: number; remaining: number } | null>(null)
   const [activeThread, setActiveThread] = useState<{ id: string; model: string } | null>(null)
   const [canContinue, setCanContinue] = useState(true)
   const [notice, setNotice] = useState('')
@@ -76,7 +77,9 @@ export function useResearch() {
         body: JSON.stringify({ query, model_id,
           ...(continuing ? { thread_id: thread.current!.id } : {}) }), signal: abort.signal,
       })
-      if (!response.ok || !response.body) throw new Error(describeFailure(response.status))
+      if (!response.ok || !response.body) {
+        throw new Error(describeFailure(response.status, response.ok ? undefined : await problemCode(response)))
+      }
       let completed = false
       for await (const event of readEvents(response.body)) {
         switch (event.type) {
@@ -84,6 +87,7 @@ export function useResearch() {
           case 'token': updateAnswer(event.text); break
           case 'step': setSteps(value => [...value, `${event.tool}: ${event.status}`]); break
           case 'sources': updateAnswer(undefined, event.items); break
+          case 'quota': setQuota({ limit: event.limit, remaining: event.remaining }); break
           case 'error': throw new Error(event.message)
           case 'done': completed = true; break
         }
@@ -105,6 +109,6 @@ export function useResearch() {
   }
   const last = turns.at(-1)
   return { turns, answer: last?.role === 'assistant' ? last.text : '', sources: last?.sources ?? [],
-    error, busy, steps, research, reset, openThread, activeThread, canContinue, notice, historyVersion,
-    stop: () => { controller.current?.abort() } }
+    error, busy, steps, quota, research, reset, openThread, activeThread, canContinue, notice,
+    historyVersion, stop: () => { controller.current?.abort() } }
 }

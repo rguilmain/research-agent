@@ -20,6 +20,9 @@ from research_agent.main import create_app
         {"type": "step", "tool": "shell", "status": "started"},
         {"type": "sources", "items": [{"url": "javascript:bad", "title": "T"}]},
         {"type": "run_started", "model_id": "model", "demo": "true"},
+        {"type": "quota", "limit": 3, "remaining": 4},
+        {"type": "quota", "limit": 0, "remaining": 0},
+        {"type": "quota", "limit": 3, "remaining": 1, "extra": 1},
     ],
 )
 def test_bad_events_rejected(value):
@@ -45,3 +48,14 @@ def test_usage_totals_must_not_add_reasoning_or_cached_twice():
     assert validate_event(event)["total_tokens"] == 130
     with pytest.raises(ValidationError):
         validate_event({**event, "total_tokens": 190})
+
+
+def test_valid_quota_event_round_trips():
+    event = validate_event({"type": "quota", "limit": 25, "remaining": 22})
+    assert event == {"type": "quota", "limit": 25, "remaining": 22}
+
+
+@pytest.mark.parametrize("remaining", [26, -1])
+def test_quota_remaining_must_be_within_the_limit(remaining):
+    with pytest.raises(ValidationError):
+        validate_event({"type": "quota", "limit": 25, "remaining": remaining})

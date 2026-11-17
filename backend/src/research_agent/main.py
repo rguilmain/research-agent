@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 
-from research_agent import __version__, ratelimit
+from research_agent import __version__, quota, ratelimit
 from research_agent.auth import AuthContext, AuthError, require_csrf
 from research_agent.auth_api import router as auth_router
 from research_agent.catalog import load_catalog
@@ -25,6 +25,7 @@ from research_agent.db import Database, configure_event_loop
 from research_agent.events import validate_event
 from research_agent.guards import RunContext, RunLimitExceeded
 from research_agent.logging import build_log_config
+from research_agent.quota import QuotaExceeded
 from research_agent.ratelimit import RateLimitExceeded
 from research_agent.repository import Conflict, NotFound, Repository
 from research_agent.research import DemoResearch, LiveResearch, ResearchService
@@ -81,6 +82,20 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
     app.include_router(threads_router)
     app.include_router(auth_router)
 
+    def problem(request: Request, status: int, code: str, title: str) -> JSONResponse:
+        """RFC 7807 response carrying a machine-readable code and the request id."""
+        return JSONResponse(
+            status_code=status,
+            content={
+                "type": "about:blank",
+                "title": title,
+                "status": status,
+                "code": code,
+                "request_id": request.state.request_id,
+            },
+            media_type="application/problem+json",
+        )
+
     @app.exception_handler(AuthError)
     async def auth_error(request: Request, exc: AuthError):
         return JSONResponse(
@@ -104,6 +119,21 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 "title": "Too many requests",
                 "status": 429,
                 "code": "rate_limited",
+                "request_id": request.state.request_id,
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+            media_type="application/problem+json",
+        )
+
+    @app.exception_handler(QuotaExceeded)
+    async def quota_exceeded(request: Request, exc: QuotaExceeded):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "type": "about:blank",
+                "title": "Daily quota exceeded",
+                "status": 429,
+                "code": "quota_exceeded",
                 "request_id": request.state.request_id,
             },
             headers={"Retry-After": str(exc.retry_after)},
@@ -173,21 +203,16 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
         owner = session.identity
         model_id = body.model_id or config.default_model
         if model_id not in catalog or not catalog[model_id].enabled:
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "type": "about:blank",
-                    "title": "Model not allowed",
-                    "status": 403,
-                    "code": "model_not_allowed",
-                    "request_id": request.state.request_id,
-                },
-                media_type="application/problem+json",
-            )
+            return problem(request, 403, "model_not_allowed", "Model not allowed")
+        spec = catalog[model_id]
+        if not quota.model_allowed_for(session.kind, spec):
+            # Anonymous callers get the small model tier only; signing in unlocks more.
+            return problem(request, 403, "model_not_allowed", "Model not allowed")
 
         repo: Repository | None = app.state.repository
         thread_id = body.thread_id
         run_id = None
+        grant: quota.QuotaGrant | None = None
         lock = AsyncExitStack()
         if repo:
             # Admission control runs before any row is created, so a refused request
@@ -207,6 +232,9 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                     ratelimit.ip_key(secret, ratelimit.client_ip(request, config)),
                     config.rate_limit_research_per_hour,
                 )
+            # Daily quotas are charged before any row exists and refunded if admission
+            # below fails, so a refused request never costs a question.
+            grant = await quota.consume(repo, config, request, session, spec)
             created = thread_id is None
             try:
                 if thread_id is None:
@@ -219,10 +247,14 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
             except BaseException:
                 with CancelScope(shield=True):
                     try:
-                        if created and thread_id is not None:
-                            await repo.discard_empty_thread(owner, thread_id)
+                        if grant is not None:
+                            await quota.refund(repo, grant)
                     finally:
-                        await lock.aclose()
+                        try:
+                            if created and thread_id is not None:
+                                await repo.discard_empty_thread(owner, thread_id)
+                        finally:
+                            await lock.aclose()
                 raise
         elif thread_id is not None:
             raise HTTPException(503, "Persistence is not configured")
@@ -249,6 +281,22 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                         f"id: {request.state.request_id}:{sequence}\ndata: "
                         + json.dumps(
                             validate_event({"type": "thread", "thread_id": str(thread_id)})
+                        )
+                        + "\n\n"
+                    )
+                if grant is not None:
+                    # Report the allowance left for this caller so the UI can warn early.
+                    sequence += 1
+                    yield (
+                        f"id: {request.state.request_id}:{sequence}\ndata: "
+                        + json.dumps(
+                            validate_event(
+                                {
+                                    "type": "quota",
+                                    "limit": grant.limit,
+                                    "remaining": grant.remaining,
+                                }
+                            )
                         )
                         + "\n\n"
                     )

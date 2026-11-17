@@ -29,7 +29,7 @@ export default function App() {
   const [identityError, setIdentityError] = useState('')
   const [authError, setAuthError] = useState(
     () => new URLSearchParams(window.location.search).get('auth_error') === '1')
-  const { turns, error, busy, steps, research, stop, reset, openThread, activeThread,
+  const { turns, error, busy, steps, quota, research, stop, reset, openThread, activeThread,
     canContinue, notice, historyVersion } = useResearch()
   const selectedModel = activeThread?.model ?? model
 
@@ -134,6 +134,7 @@ export default function App() {
         </Stack>
       </Paper>}
       {busy && <Typography role="status" sx={{ mt: 3 }}>Researching…</Typography>}
+      {quota && <Chip size="small" sx={{ mt: 3 }} label={`Daily allowance: ${quota.remaining} of ${quota.limit} left`} />}
       {error && <Alert severity="error" sx={{ mt: 3 }}>{error}</Alert>}
       {!!steps.length && <Box component="details" sx={{ mt: 3 }}><summary>Research activity</summary>
         {steps.map((step, index) => <Typography key={index} variant="body2">{step}</Typography>)}

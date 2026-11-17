@@ -41,7 +41,9 @@ def pg_settings():
         pytest.skip("Set TEST_DATABASE_URL to a dedicated *_test PostgreSQL database")
     if not (make_url(raw).database or "").endswith("_test"):
         pytest.fail("Refusing destructive database tests: database name must end with _test")
-    return Settings(app_env="test", database_url=SecretStr(raw))
+    return Settings(
+        app_env="test", database_url=SecretStr(raw), quota_anon_daily=1000, quota_user_daily=1000
+    )
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +71,8 @@ async def db(pg_settings, migrated):
             await connection.execute(
                 text(
                     "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
-                    "rate_limit_counters, checkpoints, checkpoint_blobs, checkpoint_writes CASCADE"
+                    "rate_limit_counters, quota_usage, checkpoints, checkpoint_blobs, "
+                    "checkpoint_writes CASCADE"
                 )
             )
         yield database

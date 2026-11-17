@@ -6,6 +6,7 @@ export type ResearchEvent =
   | { type: 'sources'; items: { url: string; title: string }[] }
   | { type: 'error'; code: string; message: string; request_id: string }
   | { type: 'done' }
+  | { type: 'quota'; limit: number; remaining: number }
   | { type: 'usage'; input_tokens: number; output_tokens: number; total_tokens: number;
       cached_input_tokens: number; reasoning_tokens: number; model_calls: number;
       tool_calls: Record<string, number>; estimated: boolean }
@@ -38,6 +39,8 @@ export function validateEvent(value: unknown): ResearchEvent {
     case 'step': valid = keys(v, ['type', 'tool', 'status']) && tools.includes(String(v.tool)) && ['started', 'completed'].includes(String(v.status)); break
     case 'sources': valid = keys(v, ['type', 'items']) && Array.isArray(v.items) && v.items.length <= 100 && v.items.every(s => record(s) && keys(s, ['url', 'title']) && safeUrl(s.url) && text(s.title)); break
     case 'done': valid = keys(v, ['type']); break
+    case 'quota': valid = keys(v, ['type', 'limit', 'remaining']) && count(v.limit) &&
+      Number(v.limit) >= 1 && count(v.remaining) && Number(v.remaining) <= Number(v.limit); break
     case 'error': valid = keys(v, ['type', 'code', 'message', 'request_id']) && ['research_failed', 'research_timeout', 'run_limit_exceeded'].includes(String(v.code)) && text(v.message) && text(v.request_id); break
     case 'usage': {
       const counts = ['input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens', 'reasoning_tokens', 'model_calls']

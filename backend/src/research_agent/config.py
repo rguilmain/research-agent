@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     rate_limit_anon_session_per_hour: int = 30
     rate_limit_research_per_hour: int = 30
     rate_limit_login_per_hour: int = 10
+    quota_anon_daily: int = 3
+    quota_user_daily: int = 25
 
     @property
     def login_enabled(self) -> bool:
@@ -147,6 +149,8 @@ class Settings(BaseSettings):
             <= 0
         ):
             raise ValueError("Rate limits must be positive")
+        if min(self.quota_anon_daily, self.quota_user_daily) <= 0:
+            raise ValueError("Daily quotas must be positive")
         return self
 
 

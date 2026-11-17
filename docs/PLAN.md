@@ -50,6 +50,17 @@
     any row is created. Landed as commit `5eca4cb`; CI run `44187038198` observed successful
     (backend with REQUIRE_PG=1, frontend, Docker smoke). Turnstile, daily quotas, the `quota`
     SSE event, concurrency caps and budget reservations remain open.
+  - [x] M5b-1: daily weighted quotas (`quota_usage` in migration `0004_quotas`), the `quota`
+    SSE event, anonymous model tiering, and quota UI. Turnstile moves to M5b-2.
+    - Design: a conditional upsert charges units only when they fit, so a refused request
+      never consumes quota; anonymous callers are checked per session **and** per hashed
+      address; a request refused during admission is refunded.
+    - Not covered: no refund when a run fails after admission, reset is UTC midnight, and a
+      demo process with a database also charges quota.
+  - [ ] M5b-2: Cloudflare Turnstile server validation with the browser widget and a bounded
+    "verified human" window for anonymous admission.
+  - [ ] M5c: shared concurrency caps and the global daily budget with atomic reservations and
+    settlement, including SDK retries.
 - [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
   sign-in, Turnstile, persisted theme, accessibility and privacy/data deletion screens.
 - [ ] M7: same-origin production static serving, non-root multi-stage Docker image,
@@ -69,8 +80,8 @@ Historical dependency triage is recorded below. Current next slices:
 M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful) and so is M5a
 (commit `5eca4cb`, CI run `44187038198` observed successful).
 
-1. M5b: Turnstile server validation (`TURNSTILE_SECRET_KEY`) with the browser widget, the
-   `quota` SSE event and the daily quotas in "Access and model policy to implement".
+1. M5b-2: Turnstile server validation (`TURNSTILE_SECRET_KEY`) with the browser widget and a
+   bounded "verified human" window for anonymous admission.
 2. M5c: shared concurrency caps and the global daily budget with atomic reservations and
    settlement, including SDK retries.
 3. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
@@ -79,6 +90,35 @@ M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful) and s
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 5. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M5b-1 daily quotas — November 17, 2026
+
+- Implemented: migration `0004_quotas` (`quota_usage` keyed by scope + hashed key + UTC day
+  with a `units >= 0` check); `quota.py` (UTC day and reset helpers, per-kind limits, model
+  tiering, `consume`/`refund`, `QuotaStore` protocol, `QuotaExceeded`); catalog fields
+  `quota_weight` (Luna 1, Terra 3, Sol 5) and `anonymous` (Luna only);
+  `Repository.consume_quota`/`refund_quota`/`cleanup_quotas`; a `quota` SSE event; readiness
+  now requires Alembic revision `0004`.
+- Design choices: a conditional `INSERT ... ON CONFLICT DO UPDATE ... WHERE units + n <=
+  limit RETURNING units` charges units only when they fit, so a refused request consumes
+  nothing; all keys for one question are charged in a single transaction and roll back
+  together; keys are processed in sorted order to avoid deadlocks; anonymous callers are
+  limited per session AND per hashed address; a request refused during admission is
+  refunded; resets are UTC midnight.
+- Enforced before any row is created in `main.research`, after the M5a rate limits and
+  before thread creation; over-quota requests get 429 `problem+json`
+  (`code: quota_exceeded`) with `Retry-After` in seconds until the next UTC midnight.
+  Anonymous callers may select only models with `anonymous = true`.
+- Frontend: `api/stream.ts` parses the `quota` event, `api/errors.ts` adds
+  `problemCode`/quota copy, `useResearch.ts` exposes the remaining allowance, and `App.tsx`
+  shows a small "Daily allowance" chip.
+- Observed locally: ruff/format/pyright clean; offline pytest 159 passed / 33 skipped;
+  `REQUIRE_PG=1` pytest 192 passed (88% coverage, `quota.py` 100%); frontend lint,
+  typecheck, 40 tests and build passed (bundle 495.77 kB, no warning).
+- NOT verified: CI, Docker smoke, and any live provider call. Production stays blocked.
+- Blockers/limitations: no refund when a run fails after admission; reset is UTC midnight;
+  a demo process with a database also charges quota; cleanup remains manual; Turnstile,
+  concurrency caps and monetary reservations are still missing.
 
 ### M5a rate limiting session — November 17, 2026
 
@@ -198,8 +238,8 @@ GET /api/v1/me (creates an anonymous session if absent; returns kind, user, csrf
 login_enabled); GET /auth/github/login and /auth/github/callback; POST /auth/logout.
 Unsafe routes require Origin plus X-CSRF-Token. The OAuth callback is on the public origin.
 
-SSE: thread, run_started, step, token, sources, usage, quota, done, error. Current implementation
-supports these except quota. Never stream raw chain-of-thought or secret
+SSE: thread, run_started, step, token, sources, usage, quota, done, error. All are now
+implemented. Never stream raw chain-of-thought or secret
 tool arguments. Frontend must treat EOF without done as failure.
 
 ## Security launch gates

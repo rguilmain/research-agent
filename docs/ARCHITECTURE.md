@@ -62,8 +62,9 @@ Cloudflare Turnstile protects anonymous admission, not authorization.
 6. No Redis initially. Authoritative quotas/rate limits must nevertheless be shared
    in Postgres and work across instances; in-memory buckets are only an extra layer.
 7. Secret-bearing exceptions never reach tool messages or logs; log class/request ID.
-8. The root Dockerfile is a development foundation until static serving/security
-   gates are complete. Do not mistake a successful image build for launch readiness.
+8. The root Dockerfile builds the frontend and serves it from the API process, but remains
+   a development foundation until the remaining launch gates are complete. Do not mistake a
+   successful image build or a passing smoke test for launch readiness.
 
 ## Development persistence (M3a)
 
@@ -155,8 +156,11 @@ or action, a timeout, or a malformed/oversized body all fail closed. With Cloudf
 documented test secrets the hostname is always `example.com` and no action is returned, so
 those two checks apply only to a real secret, and production readiness rejects test secrets.
 The window lasts `TURNSTILE_VERIFIED_MINUTES` (maximum 60) and is capped at the session
-expiry. No Content-Security-Policy is set yet; a future CSP (M7) must allow
-`https://challenges.cloudflare.com` in `script-src` and `frame-src`.
+expiry. Every response carries a Content-Security-Policy (`default-src 'self'`, Turnstile's
+loader in `script-src`, its widget in `frame-src`, `'unsafe-inline'` styles only because
+MUI/Emotion inject runtime `<style>` tags, GitHub's avatar host in `img-src`, and
+`object-src`/`base-uri`/`frame-ancestors` locked down), plus `Permissions-Policy`,
+`Cross-Origin-Opener-Policy: same-origin`, and HSTS only when the public URL is https.
 Threads fix their model and demo/live mode at creation. Demo run metadata is explicitly
 marked, but demo answers are never checkpointed. GET thread returns metadata only, not
 raw checkpoint state, reasoning or tool arguments. GET /threads/{id}/messages projects a

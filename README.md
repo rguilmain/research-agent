@@ -29,6 +29,21 @@ npm run dev
 Open http://localhost:5173. API docs: http://localhost:8000/docs.
 The page prominently identifies demo mode; no search or paid model call happens.
 
+### Single-container preview (development image)
+
+The image also builds the browser app and serves it from the API process, so one container
+can be opened in a browser. It is still a development image, not ready for production.
+
+```powershell
+Set-Location C:\Users\richg\dev\research-agent
+docker build -t research-agent:dev .
+docker run --rm -p 127.0.0.1:8000:8000 -e DEMO_MODE=true research-agent:dev
+```
+
+Open http://127.0.0.1:8000. In this mode `STATIC_DIR` serves the built UI, so `/docs` is
+disabled and unknown non-API paths return the app shell. Turnstile is not configured here;
+sign-in and live research still need the settings below.
+
 For live **local development only**, set `DEMO_MODE=false`, `OPENAI_API_KEY`,
 `TAVILY_API_KEY`, and `DATABASE_URL` in `backend/.env`. Wolfram Alpha is optional.
 Run the database migrations below before starting the live application.

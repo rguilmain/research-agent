@@ -77,6 +77,11 @@
   sign-in, Turnstile, persisted theme, accessibility and privacy/data deletion screens.
 - [ ] M7: same-origin production static serving, non-root multi-stage Docker image,
   container build/smoke/security tests. Do not remove production startup block yet.
+  - [x] M7a: the image builds the frontend and the API serves it same-origin (`STATIC_DIR`),
+    with `Content-Security-Policy`, `Permissions-Policy`, COOP and HTTPS-only HSTS on every
+    response, immutable caching for hashed assets, `/docs` disabled while serving the UI, and
+    container smoke checks for the served shell, CSP and bundle. See the M7a session notes.
+    Remaining M7 work: production-only startup readiness checks and container image scanning.
 - [ ] M8: Postgres integration tests, Playwright offline full-stack tests,
   dependency/security checks, branch protection and approved deployment workflow.
 - [ ] M9: Fly.io app + Managed Postgres, release migrations/checkpointer setup,
@@ -90,11 +95,12 @@
 M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful), M5a is landed
 (commit `5eca4cb`, CI run `44187038198` observed successful), and M5b-1/M5b-2/M5c are landed
 with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bdda`,
-`44206137733` on `327357c`). M3b now includes in-process scheduled cleanup.
+`44206137733` on `327357c`). M3b now includes in-process scheduled cleanup, and M7a serves the
+built frontend same-origin with security headers.
 
-1. Launch gates before any public deployment: M7 security hardening (including the Turnstile
-   CSP allowance in docs/ARCHITECTURE.md), M8 accessibility/privacy screens, M9 production
-   database and Fly.io provisioning with approval, M10 go-live checklist.
+1. Launch gates before any public deployment: the rest of M7 (production-only startup
+   readiness checks and container image scanning), M8 accessibility/privacy screens,
+   M9 production database and Fly.io provisioning with approval, M10 go-live checklist.
 2. Optional next slice: M6 multi-turn UX polish (persisted theme, quota badge placement,
    accessibility and privacy/data-deletion screens). Resume of interrupted threads stays
    unimplemented.
@@ -102,6 +108,38 @@ with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bd
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M7a same-origin static serving session — November 17, 2026
+
+- Implemented: `STATIC_DIR` (rejected unless it contains `index.html`); a new
+  `research_agent.web` module with the CSP/permissions constants and `mount_frontend`; the API
+  serves Vite's build output with an SPA fallback that never answers for `/api/`, `/auth/`,
+  `/assets/` or the reserved health/docs paths; `main.py` adds CSP, `Permissions-Policy`,
+  `Cross-Origin-Opener-Policy` and HTTPS-only HSTS to every response, caches hashed `/assets/`
+  files immutably, keeps everything else `no-store`, and disables `/docs`, `/redoc` and
+  `/openapi.json` while serving the UI (their CDN assets would violate the CSP).
+- CSP sources: `script-src`/`frame-src` `https://challenges.cloudflare.com` (documented
+  Turnstile requirement), `'unsafe-inline'` styles because MUI/Emotion inject runtime `<style>`
+  tags, `img-src` `https://avatars.githubusercontent.com` (the only avatar host the OAuth code
+  accepts) plus `data:`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`.
+- Docker: the image now has a Node build stage that runs `npm ci` and `npm run build` and
+  copies `dist/` to `/app/static` for the non-root runtime user; `scripts/smoke-docker.ps1`
+  additionally verifies the served shell, the CSP contents and an immutable hashed bundle.
+- Fix from review: `test_scheduled_pass_skips_while_another_process_holds_the_lock` previously
+  only checked that a locked pass returned `None`, so it could not fail on a broken lock; it
+  now asserts the expired thread row still exists while the lock is held.
+- Observed locally: ruff check/format clean; pyright 0 errors; offline pytest 210 passed /
+  59 skipped (8 in the new `test_web.py`); `REQUIRE_PG=1` pytest 269 passed; frontend lint,
+  typecheck, 55 tests and `npm run build` all passed; `scripts/smoke-docker.ps1` passed. A
+  running container served the app shell with the CSP, returned 404 for `/docs` and unknown
+  `/api/` paths, and served only an external module script (no inline scripts, so the CSP
+  needs no `'unsafe-inline'` for scripts).
+- NOT verified: no browser was available, so the CSP was not exercised against a real page
+  load and Turnstile was not rendered; CI has not run on this commit yet; the image is still
+  not production-ready. No container scan, no live provider call, production block untouched.
+- Limitations: there is no CSP report endpoint; `style-src 'unsafe-inline'` remains (a nonce
+  scheme needs per-request HTML rewriting and Emotion cache configuration); turning off the
+  interactive docs means operators must run the process without `STATIC_DIR` to read them.
 
 ### M3b-final scheduled cleanup session — November 17, 2026
 

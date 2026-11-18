@@ -139,7 +139,7 @@ smoke test.
   `test-results`, and `npm ci` was verified from a clean `node_modules`.
 - CI: a new `e2e` job installs Chromium (`--with-deps`) and runs `npm run e2e`. Both commits
   landed as `765c13c`; run `44217995408` observed successful for backend, frontend,
-  docker-smoke and e2e.
+  docker-smoke and e2e. The follow-up notes commit `c95608d` also passed CI as run `44218310477`.
 - Observed locally: browser tests 5 passed; frontend lint, typecheck, 55 unit tests and build
   passed; offline backend pytest 210 passed / 59 skipped; `REQUIRE_PG=1` pytest 270 passed;
   ruff/format/pyright clean; `npm audit --omit=dev` 0 vulnerabilities. `npm audit` (full) now

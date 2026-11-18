@@ -34,15 +34,15 @@ TURNSTILE_TEST_SECRETS = frozenset(
     }
 )
 
-# Security work that is not implemented at all yet. Production must stay refused while this
-# list is non-empty, even when every configuration check below passes. The validator adds
-# _INCOMPLETE_SECURITY_GATES explicitly, so editing the public name does not unblock startup.
+# Security work that is not implemented at all yet. Reported in the production refusal message
+# and kept here so tests and documentation share one list. The refusal itself is written inline
+# in the validator below, so changing this value cannot silently enable production: removing
+# the block requires a reviewed code change.
 INCOMPLETE_SECURITY_GATES = (
     "deployment backup and restore have not been tested",
     "the launch security acceptance tests have not been executed against a production-like "
     "environment",
 )
-_INCOMPLETE_SECURITY_GATES = INCOMPLETE_SECURITY_GATES
 
 
 class Settings(BaseSettings):
@@ -167,11 +167,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_runtime(self) -> "Settings":
         if self.app_env == "production":
-            # Production is refused until every configuration gate passes. The unimplemented
-            # security work is added as an explicit in-code guard (not read through the module
-            # global), so no attribute assignment can quietly re-enable production; removing
-            # the block requires a reviewed code change.
-            blockers = production_readiness_errors(self) + list(_INCOMPLETE_SECURITY_GATES)
+            # The refusal is written out in full here rather than read from
+            # INCOMPLETE_SECURITY_GATES, so no configuration value, environment variable or
+            # assignment can quietly enable production. Landing backup/restore testing and the
+            # launch acceptance tests means editing this message and the constant above on
+            # purpose, in a reviewed change.
+            blockers = production_readiness_errors(self) + [
+                "deployment backup and restore have not been tested",
+                "the launch security acceptance tests have not been executed against a "
+                "production-like environment",
+            ]
             if blockers:
                 raise ValueError(
                     "Production startup is blocked until the security launch gates pass: "

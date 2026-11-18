@@ -36,6 +36,15 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pyright
       - run: uv run pytest
+      # Dependency audit for the locked runtime and dev sets. Fails on any advisory.
+      - name: Audit locked Python dependencies
+        shell: bash
+        run: |
+          out="$(mktemp -d)"
+          uv export --locked --no-hashes --no-emit-project --no-dev --output-file "$out/runtime.txt"
+          uv export --locked --no-hashes --no-emit-project --group dev --output-file "$out/dev.txt"
+          uvx --from pip-audit==2.10.1 pip-audit -r "$out/runtime.txt" --progress-spinner off
+          uvx --from pip-audit==2.10.1 pip-audit -r "$out/dev.txt" --progress-spinner off
   frontend:
     runs-on: ubuntu-latest
     defaults:

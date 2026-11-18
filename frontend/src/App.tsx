@@ -1,22 +1,18 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Alert, Box, Button, Chip, Container, CssBaseline, FormControl, InputLabel, MenuItem,
-  Paper, Select, Stack, TextField, ThemeProvider, Typography, createTheme } from '@mui/material'
+  Paper, Select, Stack, TextField, ThemeProvider, Typography } from '@mui/material'
 import { ApiError, describeFailure } from './api/errors'
 import { ensureIdentity, loadIdentity, loginUrl, signOut } from './api/session'
 import type { Me } from './api/session'
 import ThreadHistory from './components/ThreadHistory'
 import HumanCheck from './components/HumanCheck'
+import PrivacyDialog from './components/PrivacyDialog'
+import ThemeToggle from './components/ThemeToggle'
 import { useResearch } from './hooks/useResearch'
+import { MODE_STORAGE_KEY, theme } from './theme'
 
 const MarkdownView = lazy(() => import('./components/MarkdownView'))
-
-const theme = createTheme({
-  colorSchemes: { light: true, dark: true },
-  palette: { primary: { main: '#1A5F7A' }, secondary: { main: '#159895' } },
-  shape: { borderRadius: 12 },
-  typography: { fontFamily: 'Inter, system-ui, sans-serif', button: { textTransform: 'none' } },
-})
 
 type Catalog = { default: string; items: { id: string; label: string; available: boolean }[] }
 
@@ -31,6 +27,7 @@ export default function App() {
   const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null)
   const [authError, setAuthError] = useState(
     () => new URLSearchParams(window.location.search).get('auth_error') === '1')
+  const [privacyOpen, setPrivacyOpen] = useState(false)
   const { turns, error, busy, steps, quota, failureCode, research, stop, reset, openThread,
     activeThread, canContinue, notice, historyVersion } = useResearch()
   const selectedModel = activeThread?.model ?? model
@@ -94,7 +91,7 @@ export default function App() {
     }
   }
 
-  return <ThemeProvider theme={theme} defaultMode="system"><CssBaseline />
+  return <ThemeProvider theme={theme} defaultMode="system" modeStorageKey={MODE_STORAGE_KEY}><CssBaseline />
     <Box sx={{ display: { md: 'flex' } }}>
     <ThreadHistory activeId={activeThread?.id} busy={busy} version={historyVersion}
       onOpen={item => { setQuery(''); void openThread(item) }}
@@ -116,12 +113,12 @@ export default function App() {
             <Chip label="Development" variant="outlined" />}
       </Stack>
       <Alert severity="warning" sx={{ mb: 3 }}>Not ready for public deployment. Scheduled cleanup and launch security reviews are pending.</Alert>
-      {demo === true && <Alert severity="info" sx={{ mb: 3 }}>Demo mode — no paid APIs or real web searches.</Alert>}
+      {demo === true && <Alert severity="info" role="status" sx={{ mb: 3 }}>Demo mode — no paid APIs or real web searches.</Alert>}
       {authError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setAuthError(false)}>
         GitHub sign-in did not complete. Please try again.</Alert>}
-      {identityError && <Alert severity="info" sx={{ mb: 2 }}>{identityError}</Alert>}
+      {identityError && <Alert severity="info" role="status" sx={{ mb: 2 }}>{identityError}</Alert>}
       {connectionError && <Alert severity="error">{connectionError}</Alert>}
-      {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
+      {notice && <Alert severity="info" role="status" sx={{ mb: 2 }}>{notice}</Alert>}
       {!canContinue && <Button disabled={busy} onClick={() => { reset(); setQuery('') }}>Start a new thread</Button>}
       {needsHumanCheck && <HumanCheck siteKey={turnstileSiteKey!}
         onVerified={() => { void loadIdentity().then(setIdentity).catch(() => setIdentity(null)) }} />}
@@ -152,19 +149,30 @@ export default function App() {
       {!!steps.length && <Box component="details" sx={{ mt: 3 }}><summary>Research activity</summary>
         {steps.map((step, index) => <Typography key={index} variant="body2">{step}</Typography>)}
       </Box>}
-      {turns.map((turn, index) => <Paper component="article" key={index} variant="outlined" sx={{ p: 3, mt: 3 }}>
-        <Typography component="h2" variant="h6">{turn.role === 'user' ? 'Your question' : 'Research result'}</Typography>
-        {turn.role === 'user' ? <Typography sx={{ whiteSpace: 'pre-wrap' }}>{turn.text}</Typography> :
-          <Suspense fallback={<Typography>Loading answer…</Typography>}><MarkdownView text={turn.text} /></Suspense>}
-        {!!turn.sources.length && <Box component="section">
-          <Typography component="h3" variant="subtitle1">Sources</Typography>
-          <ul>{turn.sources.map(source => <li key={source.url}><a href={source.url}
-            target="_blank" rel="noopener noreferrer nofollow">{source.title}</a></li>)}</ul>
-        </Box>}
-      </Paper>)}
-      <Typography component="footer" variant="body2" color="text.secondary" sx={{ mt: 5 }}>
-        AI can make mistakes. Check the sources before relying on an answer. No document uploads or private-document retrieval.
-      </Typography>
+      {/* A log region announces finished turns politely; aria-busy defers announcements
+          while tokens stream so screen readers are not read every fragment. */}
+      <Box role="log" aria-live="polite" aria-busy={busy} aria-label="Conversation">
+        {turns.map((turn, index) => <Paper component="article" key={index} variant="outlined" sx={{ p: 3, mt: 3 }}>
+          <Typography component="h2" variant="h6">{turn.role === 'user' ? 'Your question' : 'Research result'}</Typography>
+          {turn.role === 'user' ? <Typography sx={{ whiteSpace: 'pre-wrap' }}>{turn.text}</Typography> :
+            <Suspense fallback={<Typography>Loading answer…</Typography>}><MarkdownView text={turn.text} /></Suspense>}
+          {!!turn.sources.length && <Box component="section">
+            <Typography component="h3" variant="subtitle1">Sources</Typography>
+            <ul>{turn.sources.map(source => <li key={source.url}><a href={source.url}
+              target="_blank" rel="noopener noreferrer nofollow">{source.title}</a></li>)}</ul>
+          </Box>}
+        </Paper>)}
+      </Box>
+      <Box component="footer" sx={{ mt: 5 }}>
+        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <ThemeToggle />
+          <Button size="small" onClick={() => setPrivacyOpen(true)}>Privacy and data handling</Button>
+        </Stack>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+          AI can make mistakes. Check the sources before relying on an answer. No document uploads or private-document retrieval.
+        </Typography>
+      </Box>
+      <PrivacyDialog open={privacyOpen} onClose={() => setPrivacyOpen(false)} />
     </Container>
     </Box>
   </ThemeProvider>

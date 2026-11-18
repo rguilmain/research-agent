@@ -73,8 +73,14 @@
     fail-closed admission floor, and shared run concurrency caps. Verified locally with
     synthetic providers and a real PostgreSQL database; no live provider comparison. Landed
     as commit `327357c`; CI run `44206137733` later observed successful.
-- [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
+- [x] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
   sign-in, Turnstile, persisted theme, accessibility and privacy/data deletion screens.
+  - [x] M6a: multi-turn rendering with continuation, saved history/sidebar, GitHub sign-in,
+    Turnstile, anonymous-vs-signed-in model access tiers and the daily quota badge landed
+    earlier with M3b, M4a and M5b (server-side allowlist and quota checks, owner-checked
+    thread APIs). Resume of interrupted threads stays unimplemented by decision.
+  - [x] M6b: persisted light/dark/system theme, accessibility pass, privacy/data-handling
+    dialog and a bulk "delete all history" control. See the M6b session notes.
 - [ ] M7: same-origin production static serving, non-root multi-stage Docker image,
   container build/smoke/security tests. Do not remove production startup block yet.
   - [x] M7a: the image builds the frontend and the API serves it same-origin (`STATIC_DIR`),
@@ -120,20 +126,67 @@ run `44217995408` including the new e2e job). M3b includes in-process scheduled 
 serves the built frontend same-origin with security headers, M7b gates production startup on a
 readiness checklist plus two unimplemented security gates, and M8a adds a Playwright browser
 smoke test. M8c extends the browser suite to a database-backed server (Turnstile, quota,
-saved history).
+saved history). M6b finishes the M6 UX polish (persisted theme, accessibility, privacy
+dialog, bulk history deletion).
 
 1. Launch gates before any public deployment: the remaining M8 item is the approved deployment
    workflow, then M9 (production database and Fly.io provisioning, with approval) and M10
    (go-live checklist). Production startup is gated on the M7b readiness checklist plus
    deployment backup/restore testing and the launch acceptance tests; container image scanning
    is not planned (owner decision).
-2. Optional next slice: M6 multi-turn UX polish (persisted theme, quota badge placement,
-   accessibility and privacy/data-deletion screens). Resume of interrupted threads stays
-   unimplemented.
+2. M6 UX polish is landed (M6b). Nothing else in the milestone list is unblocked without
+   owner approval: M9/M10 need paid-infrastructure sign-off and M11 waits for the replacement
+   to be complete. Resume of interrupted threads stays unimplemented.
 3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M6b multi-turn UX polish session — November 17, 2026
+
+- Persisted theme: the theme moved to `frontend/src/theme.ts` and now enables CSS variables
+  (`cssVariables: { colorSchemeSelector: 'data-mui-color-scheme' }`). Without CSS variables,
+  `setMode` has no visual effect, so a manual light/dark toggle would only change the button.
+  `components/ThemeToggle.tsx` is an exclusive three-button group (System/Light/Dark) driven by
+  `useColorScheme`; `App.tsx` passes `modeStorageKey={MODE_STORAGE_KEY}`, so the choice lands in
+  `localStorage` under `research-agent-mode` and survives reloads without a server round trip.
+- Accessibility pass: the conversation is a `role="log"` region with `aria-live="polite"` and
+  `aria-busy={busy}`, so finished turns are announced politely while streaming fragments are
+  deferred; transient notices (demo mode, identity, quota/notice) use `role="status"`; the
+  sidebar is a `nav` landmark labelled "Thread history"; the theme group is labelled "Color
+  theme"; dialogs keep `aria-labelledby` titles.
+- Privacy/data-handling dialog (`components/PrivacyDialog.tsx`), opened from the footer. Every
+  statement matches `docs/ARCHITECTURE.md` and the settings defaults: private conversation rows,
+  24-hour anonymous expiry, 30-day signed-in retention, empty-thread grace period, delete means
+  "gone from history now, purged by cleanup", request logs without queries or credentials, and
+  opt-in tracing. The dialog states plainly what is not implemented (encryption at rest, a formal
+  retention policy, verified identity, backup/deletion guarantees) so no unimplemented guarantee
+  is promised.
+- Bulk "delete all history" in `components/ThreadHistory.tsx`: a confirmation dialog, then
+  deletion through the existing owner-checked, CSRF-protected `DELETE /api/v1/threads/{id}`
+  endpoint, 25 rows per page and bounded to 20 pages. It continues after a failed delete and
+  reports the shortfall; the offset only advances by failed rows because successful deletions
+  shift the remaining rows down. Action errors stay separate from load errors so a background
+  refresh cannot wipe a rename/delete outcome.
+- Tests: 2 `ThemeToggle` unit tests (three modes, system default, persistence across a remount;
+  the `<html>` attribute is asserted in the browser suite because jsdom does not resolve the
+  colour scheme), 2 `PrivacyDialog` tests (facts and no unimplemented promises, close/closed
+  state), and 3 `ThreadHistory` bulk-delete tests (confirmation required, partial failure keeps
+  going and reports the shortfall, no control when nothing is saved).
+- Browser coverage: two new `frontend/e2e/smoke.spec.ts` tests — the theme switch changes the
+  computed body background, sets `data-mui-color-scheme="dark"` on `<html>`, and survives a
+  reload with no CSP violations or console errors; the privacy dialog opens from the footer and
+  closes.
+- Observed locally on the branch: `npm run lint`, `npm run typecheck`, `npm test` (62 passed),
+  `npm run build`, `npm run e2e` 7 passed (Edge via `E2E_CHANNEL`), `npm run e2e:db` 4 passed
+  against the `compose.yaml` Postgres, and `npm audit --omit=dev` reported 0 vulnerabilities.
+  No backend file changed, so the backend checks were not re-run.
+- NOT verified: no CI run yet (this lands through a pull request), no real Cloudflare widget, no
+  live provider call, no deployment.
+- Limitations: bulk delete is bounded to 20 pages of 25 rows (500 threads per click); the model
+  picker cannot explain why a disabled model is unavailable because `/api/v1/models` exposes only
+  `available`, so "sign in to unlock" would need a backend change; the theme choice is per
+  browser, not per account.
 
 ### M8c database-backed browser tests session — November 17, 2026
 

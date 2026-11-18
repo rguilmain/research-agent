@@ -82,6 +82,38 @@ test('enforces the CSP against inline and third-party scripts', async ({ page })
   expect(await page.evaluate(() => 'pwned' in window)).toBe(false)
 })
 
+test('switches the theme and remembers the choice across a reload without CSP violations', async ({ page }) => {
+  const { consoleErrors, violations } = await watch(page)
+  await page.goto('/')
+  const bodyBackground = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+  const light = await bodyBackground()
+
+  await page.getByRole('button', { name: 'Dark theme' }).click()
+  // The computed background proves the scheme really switched, not just the button state.
+  await expect.poll(bodyBackground).not.toBe(light)
+  const dark = await bodyBackground()
+  // The 'data' selector writes the scheme onto <html>, so the CSS actually switches.
+  await expect(page.locator('html')).toHaveAttribute('data-mui-color-scheme', 'dark')
+  await expect(page.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true')
+
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-mui-color-scheme', 'dark')
+  await expect(page.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(bodyBackground).toBe(dark)
+  expect(violations).toEqual([])
+  expect(consoleErrors.filter(text => !text.includes(EXPECTED_503))).toEqual([])
+})
+
+test('opens the privacy and data handling dialog from the footer', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Privacy and data handling' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Privacy and data handling' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText(/Anonymous threads expire 24 hours/)).toBeVisible()
+  await dialog.getByRole('button', { name: 'Close' }).click()
+  await expect(dialog).toBeHidden()
+})
+
 test('serves deep links and keeps API paths out of the shell', async ({ page, request }) => {
   await page.goto('/threads/abc')
   await expect(page.getByRole('heading', { name: 'Research Agent' })).toBeVisible()

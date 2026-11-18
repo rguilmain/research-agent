@@ -100,8 +100,10 @@ M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful), M5a 
 (commit `5eca4cb`, CI run `44187038198` observed successful), and M5b-1/M5b-2/M5c are landed
 with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bdda`,
 `44206137733` on `327357c`; the three M7a commits landed together as `0445593` with run
-`44214853602`). M3b includes in-process scheduled cleanup, M7a serves the built frontend
-same-origin with security headers, and M8a adds a Playwright browser smoke test.
+`44214853602`, and the preview-origin fix plus the M8a browser test landed as `765c13c` with
+run `44217995408` including the new e2e job). M3b includes in-process scheduled cleanup, M7a
+serves the built frontend same-origin with security headers, and M8a adds a Playwright browser
+smoke test.
 
 1. Launch gates before any public deployment: the rest of M7 (production-only startup
    readiness checks and container image scanning), the rest of M8 (dependency/security
@@ -135,14 +137,17 @@ same-origin with security headers, and M8a adds a Playwright browser smoke test.
 - Build tooling: Vitest excludes `e2e/**`, `tsconfig.e2e.json` type-checks the specs with DOM
   and node types (`tsc -b` still passes), ESLint ignores `playwright-report` and
   `test-results`, and `npm ci` was verified from a clean `node_modules`.
-- CI: a new `e2e` job installs Chromium (`--with-deps`) and runs `npm run e2e`.
+- CI: a new `e2e` job installs Chromium (`--with-deps`) and runs `npm run e2e`. Both commits
+  landed as `765c13c`; run `44217995408` observed successful for backend, frontend,
+  docker-smoke and e2e.
 - Observed locally: browser tests 5 passed; frontend lint, typecheck, 55 unit tests and build
   passed; offline backend pytest 210 passed / 59 skipped; `REQUIRE_PG=1` pytest 270 passed;
   ruff/format/pyright clean; `npm audit --omit=dev` 0 vulnerabilities. `npm audit` (full) now
   reports 6 moderate and 7 high dev-only findings in the existing vite/vitest/typescript-eslint
   chain, all with only semver-major fixes; no forced upgrades were applied.
-- NOT verified: CI has not run on this commit; the Turnstile widget, GitHub sign-in, live
-  providers and PostgreSQL-backed flows were not exercised in a browser; no deployment.
+- NOT verified: the Turnstile widget, GitHub sign-in, live providers and PostgreSQL-backed
+  flows were not exercised in a browser; no deployment. The browser run was against an
+  installed Edge locally and Chromium in CI, not the container image.
 - Limitations: Chromium is the only engine (Firefox/WebKit are out of scope); the tests run the
   backend process rather than the container; demo mode without a database logs an expected
   503 for the owner-scoped history endpoints, which the test tolerates explicitly.

@@ -137,6 +137,13 @@ built frontend same-origin with security headers.
 - NOT verified: no browser was available, so the CSP was not exercised against a real page
   load and Turnstile was not rendered; CI has not run on this commit yet; the image is still
   not production-ready. No container scan, no live provider call, production block untouched.
+- Correction (later the same day): the container served the UI on port 8000 while
+  `PUBLIC_BASE_URL` kept its 5173 default, so a real browser posting from `127.0.0.1:8000` was
+  rejected with `csrf_failed`; the smoke check hid this by sending a hard-coded 5173 Origin.
+  `scripts/smoke-docker.ps1` now allocates a free port, sets `PUBLIC_BASE_URL` to that same
+  origin and posts with it, and an offline test asserts both the matching and mismatching cases.
+- CI: the three M7a commits were pushed together as `0445593`; run `44214853602` observed
+  successful (backend, frontend, docker-smoke).
 - Limitations: there is no CSP report endpoint; `style-src 'unsafe-inline'` remains (a nonce
   scheme needs per-request HTML rewriting and Emotion cache configuration); turning off the
   interactive docs means operators must run the process without `STATIC_DIR` to read them.

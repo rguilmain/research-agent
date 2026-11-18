@@ -82,6 +82,28 @@ def test_hsts_only_with_an_https_public_url(tmp_path):
         assert "Strict-Transport-Security" not in client.get("/healthz").headers
 
 
+def test_demo_app_with_a_custom_public_base_url_rejects_other_origins(tmp_path):
+    # The container serves the UI from the same port it advertises, so the browser Origin
+    # equals PUBLIC_BASE_URL. A stale default would make every question fail with 403.
+    build_static(tmp_path)
+    settings = Settings(
+        app_env="test", static_dir=str(tmp_path), public_base_url="http://127.0.0.1:8000"
+    )
+    with TestClient(create_app(settings)) as client:
+        accept = client.post(
+            "/api/v1/research",
+            json={"query": "same origin"},
+            headers={"origin": "http://127.0.0.1:8000"},
+        )
+        assert accept.status_code == 200 and '"type": "done"' in accept.text
+        reject = client.post(
+            "/api/v1/research",
+            json={"query": "other origin"},
+            headers={"origin": "http://127.0.0.1:5173"},
+        )
+        assert reject.status_code == 403
+
+
 def test_api_only_process_keeps_docs_and_has_no_catch_all():
     with TestClient(create_app(Settings(app_env="test"))) as client:
         assert client.get("/docs").status_code == 200

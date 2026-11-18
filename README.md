@@ -37,12 +37,14 @@ can be opened in a browser. It is still a development image, not ready for produ
 ```powershell
 Set-Location C:\Users\richg\dev\research-agent
 docker build -t research-agent:dev .
-docker run --rm -p 127.0.0.1:8000:8000 -e DEMO_MODE=true research-agent:dev
+docker run --rm -p 127.0.0.1:8000:8000 -e DEMO_MODE=true -e PUBLIC_BASE_URL=http://127.0.0.1:8000 research-agent:dev
 ```
 
-Open http://127.0.0.1:8000. In this mode `STATIC_DIR` serves the built UI, so `/docs` is
-disabled and unknown non-API paths return the app shell. Turnstile is not configured here;
-sign-in and live research still need the settings below.
+Open http://127.0.0.1:8000. `PUBLIC_BASE_URL` must match the address you open, because the
+server rejects state-changing requests whose `Origin` differs from it. In this mode
+`STATIC_DIR` serves the built UI, so `/docs` is disabled and unknown non-API paths return the
+app shell. Turnstile is not configured here; sign-in and live research still need the
+settings below.
 
 For live **local development only**, set `DEMO_MODE=false`, `OPENAI_API_KEY`,
 `TAVILY_API_KEY`, and `DATABASE_URL` in `backend/.env`. Wolfram Alpha is optional.

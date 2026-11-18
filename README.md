@@ -170,8 +170,29 @@ and supplies a PostgreSQL service, so missing database configuration fails the s
 
 With Docker running, `pwsh -File scripts/smoke-docker.ps1` builds the image and
 checks non-root execution, packaged model catalog, absence of `.env` under `/app`,
-HTTP health, and a complete demo stream. Its temporary container is removed afterwards.
+HTTP health, the served UI and CSP header, and a complete demo stream. It binds a free
+loopback port and sets `PUBLIC_BASE_URL` to that origin, so it also proves a same-origin
+request is accepted. Its temporary container is removed afterwards.
 This does not verify the unfinished production security controls or live providers.
+
+### Browser smoke test
+
+Playwright drives a real browser against the built UI and the real API in demo mode
+(no keys, no database, no third-party calls). Build first, then run from `frontend`:
+
+```powershell
+Set-Location C:\Users\richg\dev\research-agent\frontend
+npm run build
+npx playwright install chromium   # once, if no Edge or Chrome is installed
+$env:E2E_CHANNEL='msedge'         # optional: use an installed browser instead
+npm run e2e
+```
+
+Without `E2E_CHANNEL` Playwright downloads and uses its own Chromium. The tests check the
+page loads with no console errors or CSP violations, that a demo answer streams, that the
+Content-Security-Policy actually blocks inline and third-party scripts, that deep links fall
+back to the app while `/docs` and unknown `/api/` paths stay 404, and that the security
+headers are present. CI runs the `e2e` job with Chromium.
 
 No keys from the old prototype were copied. The old repository remains unchanged.
 

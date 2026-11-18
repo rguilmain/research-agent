@@ -1,5 +1,5 @@
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -13,5 +13,10 @@ export default defineConfig({
       '/auth': { target: process.env.API_PROXY_TARGET ?? 'http://127.0.0.1:8000' },
     },
   },
-  test: { environment: 'jsdom', setupFiles: ['./src/test/setup.ts'] },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    // Playwright drives a real browser from e2e/; Vitest must not pick those files up.
+    exclude: [...configDefaults.exclude, 'e2e/**'],
+  },
 })

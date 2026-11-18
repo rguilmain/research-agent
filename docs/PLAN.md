@@ -84,6 +84,10 @@
     Remaining M7 work: production-only startup readiness checks and container image scanning.
 - [ ] M8: Postgres integration tests, Playwright offline full-stack tests,
   dependency/security checks, branch protection and approved deployment workflow.
+  - [x] M8a: Playwright browser smoke test against the built UI and the real API in demo mode
+    (`frontend/e2e`, `npm run e2e`), plus a new `e2e` CI job. It found and fixed the preview
+    origin bug recorded under M7a. See the M8a session notes. Remaining M8 work: dependency
+    and security checks, branch protection, and the approved deployment workflow.
 - [ ] M9: Fly.io app + Managed Postgres, release migrations/checkpointer setup,
   secrets, health checks, HTTPS, backups/restore test, staging security smoke test.
 - [ ] M10: launch documentation/screenshot, threat model, privacy/retention policy,
@@ -95,12 +99,14 @@
 M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful), M5a is landed
 (commit `5eca4cb`, CI run `44187038198` observed successful), and M5b-1/M5b-2/M5c are landed
 with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bdda`,
-`44206137733` on `327357c`). M3b now includes in-process scheduled cleanup, and M7a serves the
-built frontend same-origin with security headers.
+`44206137733` on `327357c`; the three M7a commits landed together as `0445593` with run
+`44214853602`). M3b includes in-process scheduled cleanup, M7a serves the built frontend
+same-origin with security headers, and M8a adds a Playwright browser smoke test.
 
 1. Launch gates before any public deployment: the rest of M7 (production-only startup
-   readiness checks and container image scanning), M8 accessibility/privacy screens,
-   M9 production database and Fly.io provisioning with approval, M10 go-live checklist.
+   readiness checks and container image scanning), the rest of M8 (dependency/security
+   checks, branch protection, approved deployment workflow), M9 production database and
+   Fly.io provisioning with approval, M10 go-live checklist.
 2. Optional next slice: M6 multi-turn UX polish (persisted theme, quota badge placement,
    accessibility and privacy/data-deletion screens). Resume of interrupted threads stays
    unimplemented.
@@ -108,6 +114,38 @@ built frontend same-origin with security headers.
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M8a browser smoke test session — November 17, 2026
+
+- Added Playwright (`@playwright/test` 1.65.1, dev-only; Node requirement `>=20`, compatible
+  with the documented 22.14 baseline) with `frontend/playwright.config.ts` and
+  `frontend/e2e/smoke.spec.ts`. The config starts the real backend in demo mode on port 8123
+  with an explicit environment (`STATIC_DIR` pointing at `dist`, keys and `DATABASE_URL`
+  empty), never reuses an existing server, and refuses to run without a build.
+- Five tests, all passing locally in an installed Edge via `E2E_CHANNEL=msedge`: clean load
+  (no console errors, no CSP violations, no third-party requests), a streamed demo answer
+  that never claims to be real research, CSP enforcement (an injected inline script and a
+  third-party script are both blocked and `window.__pwned` stays unset), deep links plus 404
+  for `/docs` and unknown `/api/` paths, and the expected document security headers.
+- The browser run found a real defect that the earlier smoke check hid: the container served
+  the UI on its own port while `PUBLIC_BASE_URL` kept the 5173 default, so a browser asking a
+  question was rejected with 403. `scripts/smoke-docker.ps1` now picks a free port, sets
+  `PUBLIC_BASE_URL` to that origin and posts with it. The browser test passes against the
+  fixed configuration.
+- Build tooling: Vitest excludes `e2e/**`, `tsconfig.e2e.json` type-checks the specs with DOM
+  and node types (`tsc -b` still passes), ESLint ignores `playwright-report` and
+  `test-results`, and `npm ci` was verified from a clean `node_modules`.
+- CI: a new `e2e` job installs Chromium (`--with-deps`) and runs `npm run e2e`.
+- Observed locally: browser tests 5 passed; frontend lint, typecheck, 55 unit tests and build
+  passed; offline backend pytest 210 passed / 59 skipped; `REQUIRE_PG=1` pytest 270 passed;
+  ruff/format/pyright clean; `npm audit --omit=dev` 0 vulnerabilities. `npm audit` (full) now
+  reports 6 moderate and 7 high dev-only findings in the existing vite/vitest/typescript-eslint
+  chain, all with only semver-major fixes; no forced upgrades were applied.
+- NOT verified: CI has not run on this commit; the Turnstile widget, GitHub sign-in, live
+  providers and PostgreSQL-backed flows were not exercised in a browser; no deployment.
+- Limitations: Chromium is the only engine (Firefox/WebKit are out of scope); the tests run the
+  backend process rather than the container; demo mode without a database logs an expected
+  503 for the owner-scoped history endpoints, which the test tolerates explicitly.
 
 ### M7a same-origin static serving session — November 17, 2026
 

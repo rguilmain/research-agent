@@ -73,6 +73,21 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.7-alpine
+        env:
+          POSTGRES_USER: research_test
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: research_agent_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U research_test -d research_agent_e2e"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      # The database-backed browser suite runs against this service database.
+      E2E_DATABASE_URL: postgresql://research_test:ci-only-password@127.0.0.1:5432/research_agent_e2e
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -92,4 +107,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
         working-directory: frontend
       - run: npm run e2e
+        working-directory: frontend
+      - name: Browser tests against a database-backed server
+        run: npm run e2e:db
         working-directory: frontend

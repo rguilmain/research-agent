@@ -194,6 +194,27 @@ Content-Security-Policy actually blocks inline and third-party scripts, that dee
 back to the app while `/docs` and unknown `/api/` paths stay 404, and that the security
 headers are present. CI runs the `e2e` job with Chromium.
 
+#### Database-backed browser tests
+
+A second Playwright config runs the same built UI against a real PostgreSQL-backed server, so
+the anonymous session, server-side Turnstile verification, the daily quota refusal and the
+saved-history sidebar are exercised for real. Cloudflare is replaced by a local stub
+(`e2e-db/siteverify-stub.mjs`) through `TURNSTILE_VERIFY_URL`; production readiness refuses any
+endpoint other than Cloudflare's, so that override cannot ship.
+
+```powershell
+Set-Location C:\Users\richg\dev\research-agent
+docker compose up -d --wait db
+Set-Location .\frontend
+npm run build
+$env:E2E_CHANNEL='msedge'   # optional
+npm run e2e:db
+```
+
+The launcher creates the dedicated `research_agent_e2e` database, applies migrations and then
+serves the app on `127.0.0.1:8125`. Set `E2E_DATABASE_URL` to use another PostgreSQL server
+(CI points it at a service container). No provider keys are used, and nothing leaves the machine.
+
 No keys from the old prototype were copied. The old repository remains unchanged.
 
 ### Optional account visibility check

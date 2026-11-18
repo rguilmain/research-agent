@@ -33,7 +33,8 @@ Run: `uv run research-agent`.
 Frontend (from frontend): `npm ci`, `npm run lint`, `npm run typecheck`,
 `npm test`, `npm run build`, `npm run e2e` (needs `npm run build` first; it downloads
 a browser unless `npx playwright install chromium` was already run, or an installed
-Edge/Chrome is selected with `E2E_CHANNEL`). Run: `npm run dev`.
+Edge/Chrome is selected with `E2E_CHANNEL`), `npm run e2e:db` (database-backed; needs the
+local PostgreSQL service or `E2E_DATABASE_URL`). Run: `npm run dev`.
 
 Done means changed files reviewed, checks actually run, and limitations documented.
 Never claim deployment, live provider calls, or CI success without observing them.

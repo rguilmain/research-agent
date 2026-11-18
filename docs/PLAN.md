@@ -125,9 +125,12 @@ Historical dependency triage is recorded below. Current next slices:
   59 skipped (7 in `test_maintenance.py`); `REQUIRE_PG=1` pytest 261 passed (3 new PostgreSQL
   tests); `scripts/smoke-docker.ps1` passed (image safety, packaged migrations, HTTP health,
   demo SSE; the demo container has no database, so no cleanup task starts there).
-- NOT verified: CI, a multi-worker or multi-machine deployment, and any live provider call.
-  No frontend or dependency changes, so frontend checks and `uv sync --locked` were not re-run.
-  Production stays blocked.
+- CI: landed as commit `b23624a`; run `44210570001` observed successful (backend with
+  REQUIRE_PG=1, frontend, docker-smoke).
+- NOT verified: a multi-worker or multi-machine deployment (the advisory lock is designed for
+  it, but only a single process has been exercised outside the CI fixture) and any live
+  provider call. No frontend or dependency changes, so frontend checks and `uv sync --locked`
+  were not re-run. Production stays blocked.
 - Limitations: the schedule lives inside the web process rather than a separate cron; one pass
   drains at most 100 rows per category, so a large backlog needs several intervals or
   `--max-batches` by hand; a pass is skipped (not queued) while another process holds the lock;

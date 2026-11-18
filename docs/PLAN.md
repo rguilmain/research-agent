@@ -127,7 +127,7 @@ serves the built frontend same-origin with security headers, M7b gates productio
 readiness checklist plus two unimplemented security gates, and M8a adds a Playwright browser
 smoke test. M8c extends the browser suite to a database-backed server (Turnstile, quota,
 saved history). M6b finishes the M6 UX polish (persisted theme, accessibility, privacy
-dialog, bulk history deletion).
+dialog, bulk history deletion) in pull request #20.
 
 1. Launch gates before any public deployment: the remaining M8 item is the approved deployment
    workflow, then M9 (production database and Fly.io provisioning, with approval) and M10
@@ -181,8 +181,10 @@ dialog, bulk history deletion).
   `npm run build`, `npm run e2e` 7 passed (Edge via `E2E_CHANNEL`), `npm run e2e:db` 4 passed
   against the `compose.yaml` Postgres, and `npm audit --omit=dev` reported 0 vulnerabilities.
   No backend file changed, so the backend checks were not re-run.
-- NOT verified: no CI run yet (this lands through a pull request), no real Cloudflare widget, no
-  live provider call, no deployment.
+- CI: landed as commit `c952266` on `feat/m6-theme-a11y-privacy` (pull request #20); run
+  `44242399516` observed successful for backend, frontend, docker-smoke and e2e. The checks were
+  already green before merge, and the merge itself is left to the owner.
+- NOT verified: no real Cloudflare widget, no live provider call, no deployment.
 - Limitations: bulk delete is bounded to 20 pages of 25 rows (500 threads per click); the model
   picker cannot explain why a disabled model is unavailable because `/api/v1/models` exposes only
   `available`, so "sign in to unlock" would need a backend change; the theme choice is per

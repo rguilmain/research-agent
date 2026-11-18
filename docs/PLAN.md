@@ -96,8 +96,9 @@
   - [x] M8b: the production refusal is now a hard-coded guard rather than data, and the CI
     `backend` job audits the locked runtime and dev dependency sets with pinned `pip-audit`
     (any advisory fails the build). `main` is protected by the `backend`, `frontend`,
-    `docker-smoke` and `e2e` checks with force-pushes blocked. See the M8b session notes.
-    Remaining M8 work: the approved deployment workflow (M9/M10).
+    `docker-smoke` and `e2e` checks, with force-pushes and deletions blocked and admin
+    enforcement on. See the M8b session notes. Remaining M8 work: the approved deployment
+    workflow (M9/M10).
 - [ ] M9: Fly.io app + Managed Postgres, release migrations/checkpointer setup,
   secrets, health checks, HTTPS, backups/restore test, staging security smoke test.
 - [ ] M10: launch documentation/screenshot, threat model, privacy/retention policy,
@@ -116,11 +117,11 @@ serves the built frontend same-origin with security headers, M7b gates productio
 readiness checklist plus two unimplemented security gates, and M8a adds a Playwright browser
 smoke test.
 
-1. Launch gates before any public deployment: finish M8 (dependency/security checks, branch
-   protection, approved deployment workflow), then M9 (production database and Fly.io
-   provisioning, with approval) and M10 (go-live checklist). Production startup is gated on
-   the M7b readiness checklist plus deployment backup/restore testing and the launch
-   acceptance tests; container image scanning is not planned (owner decision).
+1. Launch gates before any public deployment: the remaining M8 item is the approved deployment
+   workflow, then M9 (production database and Fly.io provisioning, with approval) and M10
+   (go-live checklist). Production startup is gated on the M7b readiness checklist plus
+   deployment backup/restore testing and the launch acceptance tests; container image scanning
+   is not planned (owner decision).
 2. Optional next slice: M6 multi-turn UX polish (persisted theme, quota badge placement,
    accessibility and privacy/data-deletion screens). Resume of interrupted threads stays
    unimplemented.
@@ -140,12 +141,20 @@ smoke test.
   set and for `--group dev`, then pinned `uvx --from pip-audit==2.10.1 pip-audit -r`. Owner
   decision: any advisory fails the build rather than being allow-listed. Both sets audit clean
   locally (225 and 252 requirement lines, exit 0), so the step should pass on the first run.
-- Branch protection on `main`: required checks are the job IDs `backend`, `frontend`,
-  `docker-smoke` and `e2e`, with strict up-to-date branches, force-push and deletion blocked,
-  and pull-request reviews not required (single maintainer). Administrator bypass stays
-  available for recovery only.
-- Documentation: `CONTRIBUTING.md` gained the pull-request workflow, `AGENTS.md` records the
-  audit command, the protected-branch rule and the exact production refusal condition.
+- Branch protection on `main` (verified read back from the API): required checks `backend`,
+  `frontend`, `docker-smoke` and `e2e` with strict up-to-date branches, force-push and deletion
+  blocked, conversation resolution required, and `enforce_admins` enabled so the checks also
+  apply to the maintainer. A direct push of a throwaway commit is rejected with
+  `GH006: Protected branch update failed ... 4 of 4 required status checks are expected`.
+- Process note worth remembering: with `enforce_admins` off, an admin direct push landed with
+  `remote: Bypassed rule violations ... 4 of 4 required status checks are expected`. The probe
+  commit was empty (identical tree), so no history content changed. `enforce_admins=true`
+  removes that bypass. Recovery, if a required check is ever stuck, is to set `enforce_admins`
+  back to `false` temporarily through the API, then restore it; the procedure is in
+  CONTRIBUTING.md.
+- Documentation: `CONTRIBUTING.md` gained the pull-request workflow, the protected-branch
+  settings and the recovery procedure; `AGENTS.md` records the audit command, the
+  protected-branch rule and the exact production refusal condition.
 - Checks observed locally: ruff check/format clean; pyright 0 errors; offline pytest 225 passed
   / 59 skipped; `REQUIRE_PG=1` pytest 284 passed; both pip-audit runs clean.
 - NOT verified: no production-like environment; no deployment. The full `e2e`/frontend jobs were

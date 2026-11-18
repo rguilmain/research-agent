@@ -149,8 +149,9 @@ smoke test.
   59 skipped; `REQUIRE_PG=1` pytest 283 passed. No frontend change, so frontend checks were not
   re-run. Container image scanning was intentionally not added.
 - NOT verified: no production-like environment exists, so no production startup has ever
-  succeeded; backups, acceptance tests and deployment remain unimplemented. CI has not run on
-  this commit.
+  succeeded; backups, acceptance tests and deployment remain unimplemented.
+- CI: landed as commit `282600f`; run `44221610189` observed successful for backend (with
+  `REQUIRE_PG=1`), frontend, docker-smoke and e2e.
 - Limitations: readiness is a startup-time configuration gate, not a runtime health check; the
   anonymous-eligible and default-model checks read the packaged catalog, so editing
   `models.toml` changes them; the refusal message is deliberately terse and lists only gate

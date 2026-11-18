@@ -141,14 +141,18 @@ saved history).
   specs in `frontend/e2e-db/`) that serves the built UI from a real PostgreSQL-backed process.
   `e2e-db/start-backend.mjs` creates the dedicated `research_agent_e2e` database, applies
   migrations, then serves the app; `e2e-db/siteverify-stub.mjs` stands in for Cloudflare.
-- Three browser tests cover what the demo-only suite cannot: the anonymous session plus
+- Four browser tests cover what the demo-only suite cannot: the anonymous session plus
   server-side Turnstile verification unlocking the form and answering a question; the saved
   thread appearing in the sidebar with its query-derived title, being renamed through the
-  real dialog, and being reopened; and the second question of the day refused by the daily
-  quota with the specific `quota_exceeded` copy.
+  real dialog, and being reopened; the second question of the day refused by the daily
+  quota with the specific `quota_exceeded` copy; and a deterministic check that the server
+  refuses an unverified anonymous run (403 `turnstile_required`) even when the client is
+  driven straight at the API, bypassing the disabled button.
 - Test isolation: each test sends its own `fly-client-ip` with `TRUST_PROXY_HEADERS=true`, so
   the per-address quota and rate-limit buckets do not leak between tests. The trusted proxy
-  header is acceptable only because this is a loopback-only test process.
+  header is acceptable only because this is a loopback-only test process. The launcher then
+  truncates the dedicated `research_agent_e2e` tables before every run via
+  `e2e-db/reset-database.py`, which refuses any database not named `*_e2e`.
 - Production safety: `TURNSTILE_VERIFY_URL` is the one production-code change, and production
   readiness refuses any value other than Cloudflare's endpoint, because a substituted endpoint
   would mark every caller verified. Backend tests assert the default, that an override is
@@ -156,11 +160,22 @@ saved history).
 - Note: the reopen assertion deliberately checks the stored metadata path (a demo thread has no
   checkpoint, so `items` is empty and `can_continue` is false). Transcript rendering is covered
   by the backend history tests, not here.
-- Observed locally: `npm run e2e:db` 3 passed (Edge), `npm run e2e` 5 passed, frontend lint,
-  typecheck, 55 unit tests and build passed; backend ruff/format/pyright clean and the
-  Turnstile/readiness/budget suites 57 passed.
-- NOT verified: CI has not run on this commit; the stub is not Cloudflare, so a real widget and
-  a real `siteverify` round trip remain unexercised; no live provider calls; no deployment.
+- Observed locally: `npm run e2e:db` 4 passed on four consecutive runs (Edge), `npm run e2e`
+  5 passed, frontend lint, typecheck, 55 unit tests and build passed; backend
+  ruff/format/pyright clean and the Turnstile/readiness/budget suites 57 passed.
+- CI: landed as commit `903bf47`; run `44229342687` observed successful for backend, frontend,
+  docker-smoke and e2e. The e2e job log for run `44228802805` shows the database-backed step
+  ran and printed `3 passed`, with the app reaching "Application startup complete" against the
+  CI Postgres service, so the migrations and launcher work there too.
+- Flake found and fixed: a later run (`44229861950`) failed because the stubbed loader verified
+  with a zero-delay callback, so the challenge panel could appear and vanish before Playwright
+  observed it. The stub now waits a realistic 250 ms, and the fourth test above pins the
+  enforcement behaviour without depending on that timing. Reviewing the same failure surfaced a
+  second defect: because the e2e database persisted between local runs, the fixed test addresses
+  had already spent their daily quota, which failed three tests on a repeat run. The launcher
+  now resets the database first, and four consecutive local runs pass.
+- NOT verified: the stub is not Cloudflare, so a real widget and a real `siteverify` round trip
+  remain unexercised; no live provider calls; no deployment.
 - Limitations: demo threads have no checkpointed transcript, so reopening proves metadata and
   ownership rather than answer rendering; the database-backed suite needs a reachable
   PostgreSQL server; Firefox and WebKit remain out of scope.

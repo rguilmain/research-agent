@@ -166,7 +166,9 @@ saved history).
 - CI: landed as commit `903bf47`; run `44229342687` observed successful for backend, frontend,
   docker-smoke and e2e. The e2e job log for run `44228802805` shows the database-backed step
   ran and printed `3 passed`, with the app reaching "Application startup complete" against the
-  CI Postgres service, so the migrations and launcher work there too.
+  CI Postgres service, so the migrations and launcher work there too. The flake/state-leak fix
+  landed as `3809d4c`; run `44231592913` observed successful with the e2e log showing
+  `4 passed`, and the post-merge run `44232104701` also passed all four jobs.
 - Flake found and fixed: a later run (`44229861950`) failed because the stubbed loader verified
   with a zero-delay callback, so the challenge panel could appear and vanish before Playwright
   observed it. The stub now waits a realistic 250 ms, and the fourth test above pins the

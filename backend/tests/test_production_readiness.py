@@ -154,8 +154,18 @@ def test_production_block_message_lists_the_unimplemented_gates():
     with pytest.raises(ValidationError) as exc:
         Settings(app_env="production", **data())
     message = str(exc.value)
+    # The documented list and the inline refusal text must stay in step.
     for gate in INCOMPLETE_SECURITY_GATES:
         assert gate in message
+
+
+def test_incomplete_gate_list_matches_the_inline_refusal():
+    # The refusal is hard-coded in the validator, so this guards the duplication.
+    with pytest.raises(ValidationError) as exc:
+        Settings(app_env="production", **data())
+    message = str(exc.value)
+    assert len(INCOMPLETE_SECURITY_GATES) == 2
+    assert "backup and restore" in message and "acceptance tests" in message
 
 
 def test_incomplete_gate_list_names_backup_and_acceptance_work():

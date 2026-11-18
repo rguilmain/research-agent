@@ -92,8 +92,12 @@
   dependency/security checks, branch protection and approved deployment workflow.
   - [x] M8a: Playwright browser smoke test against the built UI and the real API in demo mode
     (`frontend/e2e`, `npm run e2e`), plus a new `e2e` CI job. It found and fixed the preview
-    origin bug recorded under M7a. See the M8a session notes. Remaining M8 work: dependency
-    and security checks, branch protection, and the approved deployment workflow.
+    origin bug recorded under M7a. See the M8a session notes.
+  - [x] M8b: the production refusal is now a hard-coded guard rather than data, and the CI
+    `backend` job audits the locked runtime and dev dependency sets with pinned `pip-audit`
+    (any advisory fails the build). `main` is protected by the `backend`, `frontend`,
+    `docker-smoke` and `e2e` checks with force-pushes blocked. See the M8b session notes.
+    Remaining M8 work: the approved deployment workflow (M9/M10).
 - [ ] M9: Fly.io app + Managed Postgres, release migrations/checkpointer setup,
   secrets, health checks, HTTPS, backups/restore test, staging security smoke test.
 - [ ] M10: launch documentation/screenshot, threat model, privacy/retention policy,
@@ -124,6 +128,32 @@ smoke test.
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M8b security tooling session — November 17, 2026
+
+- Hardened the production refusal. The gate text is now written inline in `validate_runtime`
+  instead of being read from `INCOMPLETE_SECURITY_GATES`, so no assignment or environment value
+  can enable production; the exported constant stays as the shared documentation/tests list,
+  and a test asserts the two agree. Verified with a fully configured production settings object:
+  it is still refused, naming both open gates.
+- Added a locked-dependency audit to the CI `backend` job: `uv export --locked` for the runtime
+  set and for `--group dev`, then pinned `uvx --from pip-audit==2.10.1 pip-audit -r`. Owner
+  decision: any advisory fails the build rather than being allow-listed. Both sets audit clean
+  locally (225 and 252 requirement lines, exit 0), so the step should pass on the first run.
+- Branch protection on `main`: required checks are the job IDs `backend`, `frontend`,
+  `docker-smoke` and `e2e`, with strict up-to-date branches, force-push and deletion blocked,
+  and pull-request reviews not required (single maintainer). Administrator bypass stays
+  available for recovery only.
+- Documentation: `CONTRIBUTING.md` gained the pull-request workflow, `AGENTS.md` records the
+  audit command, the protected-branch rule and the exact production refusal condition.
+- Checks observed locally: ruff check/format clean; pyright 0 errors; offline pytest 225 passed
+  / 59 skipped; `REQUIRE_PG=1` pytest 284 passed; both pip-audit runs clean.
+- NOT verified: no production-like environment; no deployment. The full `e2e`/frontend jobs were
+  exercised by the pull-request CI run, not locally for this change (no frontend edits).
+- Limitations: the audit covers locked Python dependencies only, not transitive OS packages or
+  the Node dev chain (the frontend job runs `npm audit --omit=dev` and the dev-only findings in
+  the vite/vitest chain remain documented); branch protection relies on GitHub settings that a
+  repository admin can change.
 
 ### M7b production readiness session — November 17, 2026
 

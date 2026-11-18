@@ -7,6 +7,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -36,6 +37,7 @@ from research_agent.research import MAX_RETRIES, DemoResearch, LiveResearch, Res
 from research_agent.streaming import stream_events
 from research_agent.threads_api import router as threads_router
 from research_agent.turnstile import TurnstileRequired
+from research_agent.web import CSP, PERMISSIONS_POLICY, mount_frontend
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,16 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
             )
             yield
 
-    app = FastAPI(title="Research Agent", version=__version__, lifespan=lifespan)
+    app = FastAPI(
+        title="Research Agent",
+        version=__version__,
+        lifespan=lifespan,
+        # A same-origin container serves the UI; the CDN-hosted docs pages would be blocked
+        # by our CSP, so expose them only when this process is API-only.
+        docs_url=None if config.static_dir else "/docs",
+        redoc_url=None if config.static_dir else "/redoc",
+        openapi_url=None if config.static_dir else "/openapi.json",
+    )
     app.state.settings = config
     app.include_router(threads_router)
     app.include_router(auth_router)
@@ -203,7 +214,16 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Content-Security-Policy"] = CSP
+        response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
+        if config.secure_cookies:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        if request.url.path.startswith("/assets/") and response.status_code == 200:
+            # Vite filenames carry a content hash, so this is safe; index.html stays no-store.
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/healthz")
@@ -470,6 +490,9 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 "Cache-Control": "no-store",
             },
         )
+
+    if config.static_dir:
+        mount_frontend(app, Path(config.static_dir))
 
     return app
 

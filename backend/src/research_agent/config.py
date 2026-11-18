@@ -3,6 +3,7 @@
 import logging
 import secrets
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -43,6 +44,9 @@ class Settings(BaseSettings):
     wolfram_alpha_appid: SecretStr = SecretStr("")
     host: str = "127.0.0.1"
     port: int = 8000
+    # Built frontend directory served same-origin; empty means API-only. Never point this at
+    # a user-controlled path: everything inside it becomes reachable over HTTP.
+    static_dir: str = ""
     max_model_calls: int = 8
     max_tool_calls: int = 12
     run_timeout_s: float = 120
@@ -201,6 +205,8 @@ class Settings(BaseSettings):
             raise ValueError("Concurrency limits must be positive")
         if self.max_active_runs_per_principal > self.max_active_runs:
             raise ValueError("MAX_ACTIVE_RUNS_PER_PRINCIPAL cannot exceed MAX_ACTIVE_RUNS")
+        if self.static_dir and not (Path(self.static_dir) / "index.html").is_file():
+            raise ValueError("STATIC_DIR must contain index.html")
         return self
 
 

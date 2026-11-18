@@ -103,8 +103,6 @@ with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bd
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
 
-Historical dependency triage is recorded below. Current next slices:
-
 ### M3b-final scheduled cleanup session — November 17, 2026
 
 - Implemented: `CLEANUP_INTERVAL_MINUTES` (default 15, 0 disables, validated 0-1440);
@@ -120,7 +118,9 @@ Historical dependency triage is recorded below. Current next slices:
 - Test note: a connection returned to the pool can be handed to the same process again, and a
   PostgreSQL session advisory lock is re-entrant for the session that already holds it, so the
   lock holder now holds an open transaction to pin its connection. Covered by
-  `test_maintenance_lock_is_exclusive`.
+  `test_maintenance_lock_is_exclusive`, and by `test_scheduled_pass_skips_while_another_process_holds_the_lock`,
+  which now asserts the thread still exists while the lock is held (the earlier version only
+  checked the pass returned None, so it could have passed with a broken lock).
 - Observed locally: ruff check/format clean; pyright 0 errors; offline pytest 202 passed /
   59 skipped (7 in `test_maintenance.py`); `REQUIRE_PG=1` pytest 261 passed (3 new PostgreSQL
   tests); `scripts/smoke-docker.ps1` passed (image safety, packaged migrations, HTTP health,

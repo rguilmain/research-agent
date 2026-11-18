@@ -595,12 +595,15 @@ async def test_scheduled_pass_skips_while_another_process_holds_the_lock(db, pg_
         other_repo = Repository(other, pg_settings)
         async with repo.maintenance_lock():
             assert await scheduled_cleanup_pass(other_repo) is None
+            # An expired thread is already invisible to owner-scoped reads, so check the row.
+            async with db.sessions() as session:
+                assert await session.get(Thread, tid) is not None
         # Expired rows left by other tests may exist, so check the thread, not an exact count.
         removed = await scheduled_cleanup_pass(other_repo)
         assert removed is not None and removed >= 1
         assert await scheduled_cleanup_pass(other_repo) == 0
-    with pytest.raises(NotFound):
-        await repo.get_thread(owner, tid)
+    async with db.sessions() as session:
+        assert await session.get(Thread, tid) is None
 
 
 def test_scheduled_cleanup_task_lifecycle(pg_settings, migrated):

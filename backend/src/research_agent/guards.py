@@ -2,17 +2,24 @@
 
 import asyncio
 import json
+import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from math import ceil
 from typing import Any
+from uuid import UUID
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from langchain_core.messages.utils import count_tokens_approximately
 
+from research_agent.budget import BudgetExhausted, BudgetLedger
+from research_agent.catalog import ModelSpec, conservative_model_cost, model_call_reservation
 from research_agent.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -30,6 +37,8 @@ class RunContext:
     estimated: bool = False
     persist: Callable[[dict[str, Any]], Awaitable[None]] | None = None
     persistence_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # None in demo mode and in tests: nothing is charged against the shared daily budget.
+    budget: BudgetLedger | None = None
 
     async def save(self) -> None:
         if self.persist is not None:
@@ -57,9 +66,26 @@ class RunLimitExceeded(RuntimeError):
     """A local safety bound rejected work before a provider call."""
 
 
+class RunBudgetExhausted(RunLimitExceeded):
+    """The shared daily budget had no room for the next paid call."""
+
+
+async def _settle(ledger: BudgetLedger, reservation: UUID | None, actual: Decimal) -> None:
+    """Charge a hold, never letting a settlement problem mask a bigger failure."""
+    if reservation is None:
+        return
+    try:
+        await ledger.settle(reservation, actual)
+    except Exception:
+        # The reservation stays open and is charged in full by run settlement or expiry.
+        logger.warning("Budget settlement failed for one reservation")
+
+
 class ModelGuards(AgentMiddleware):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, model: ModelSpec, attempts: int = 2) -> None:
         self.settings = settings
+        self.model = model
+        self.attempts = attempts
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         context: RunContext = request.runtime.context
@@ -75,6 +101,20 @@ class ModelGuards(AgentMiddleware):
             raise RunLimitExceeded("Model context safety limit reached")
         context.reserved_input_tokens += estimate
         context.model_calls += 1
+        # Hold the worst case for this call, covering the SDK's retry allowance, before dispatch.
+        ledger = context.budget
+        hold = model_call_reservation(
+            self.model,
+            input_tokens=estimate,
+            output_tokens=self.settings.max_output_tokens,
+            attempts=self.attempts,
+        )
+        reservation: UUID | None = None
+        if ledger is not None:
+            try:
+                reservation = await ledger.reserve("model", hold)
+            except BudgetExhausted:
+                raise RunBudgetExhausted("Daily research budget reached") from None
         # Persist the conservative in-flight bound BEFORE dispatch. A crash or failed
         # provider response must not turn an unknown bill into zero recorded usage.
         before_input, before_output = context.input_tokens, context.output_tokens
@@ -83,16 +123,24 @@ class ModelGuards(AgentMiddleware):
         context.output_tokens += self.settings.max_output_tokens
         context.estimated = True
         await context.save()
-        response = await handler(request)
+        try:
+            response = await handler(request)
+        except BaseException:
+            # A failed or cancelled dispatch may still have been billed; charge the full hold.
+            if ledger is not None:
+                await _settle(ledger, reservation, hold)
+            raise
         context.input_tokens, context.output_tokens = before_input, before_output
         context.estimated = before_estimated
         # Only final model messages, never streamed chunks or graph updates, are counted.
         usages = [m.usage_metadata for m in response.result if getattr(m, "usage_metadata", None)]
+        actual: Decimal | None = None
         if not usages:
             context.input_tokens += estimate
             context.output_tokens += self.settings.max_output_tokens
             context.estimated = True
         else:
+            billed = Decimal(0)
             for usage in usages:
                 inp, out = usage["input_tokens"], usage["output_tokens"]
                 cached = sum(
@@ -111,17 +159,29 @@ class ModelGuards(AgentMiddleware):
                 context.output_tokens += out
                 context.cached_input_tokens += cached
                 context.reasoning_tokens += reasoning
+                billed += conservative_model_cost(
+                    self.model,
+                    input_tokens=inp,
+                    output_tokens=out,
+                    cached_input_tokens=cached,
+                )
+            actual = billed
             # Later calls must account for actual input if it exceeded our estimate.
             context.reserved_input_tokens += max(
                 0, sum(u["input_tokens"] for u in usages) - estimate
             )
+        if ledger is not None:
+            # Missing usage settles at the full hold: never under-record an unknown bill.
+            await _settle(ledger, reservation, hold if actual is None else actual)
         await context.save()
         return response
 
 
 class ToolGuards(AgentMiddleware):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, prices: dict[str, Decimal]) -> None:
         self.settings = settings
+        # A tool with no verified price is never offered, so an unpriced call must be refused.
+        self.prices = prices
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
         context: RunContext = request.runtime.context
@@ -143,10 +203,27 @@ class ToolGuards(AgentMiddleware):
         if key in context.seen:
             return reject("Already searched; reuse the earlier result.")
         context.seen.add(key)
+        price = self.prices.get(call["name"])
+        if price is None:
+            return reject("That tool is unavailable; answer with the evidence you have.")
         async with context.semaphore:
+            ledger = context.budget
+            reservation: UUID | None = None
+            if ledger is not None and price > 0:
+                try:
+                    reservation = await ledger.reserve("tool", price)
+                except BudgetExhausted:
+                    return reject(
+                        "Search budget exhausted; answer with the evidence already gathered."
+                    )
             context.tool_calls[call["name"]] += 1
             await context.save()
-            result = await handler(request)
+            try:
+                result = await handler(request)
+            finally:
+                # A paid tool call is charged its full price whether or not it succeeded.
+                if ledger is not None:
+                    await _settle(ledger, reservation, price)
         if isinstance(result, ToolMessage):
             content = result.content
             encoded = content if isinstance(content, str) else json.dumps(content)

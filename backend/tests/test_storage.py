@@ -71,7 +71,8 @@ async def db(pg_settings, migrated):
             await connection.execute(
                 text(
                     "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
-                    "rate_limit_counters, quota_usage, checkpoints, checkpoint_blobs, "
+                    "rate_limit_counters, quota_usage, budget_reservations, budget_days, "
+                    "checkpoints, checkpoint_blobs, "
                     "checkpoint_writes CASCADE"
                 )
             )
@@ -418,7 +419,7 @@ def test_failed_auto_admission_removes_only_new_empty_thread(
     with signed_in_client(app) as client:
         existing = client.post("/api/v1/threads", json={}).json()["id"]
 
-        async def reject(*args):
+        async def reject(*args, **kwargs):
             if failure == "conflict":
                 raise Conflict("Thread is busy")
             raise SQLAlchemyError("SECRET")

@@ -69,8 +69,12 @@ event. Anonymous callers must also pass Cloudflare Turnstile: set `TURNSTILE_SIT
 `1x00000000000000000000AA` and `1x0000000000000000000000000000000AA`) and the page shows one
 widget instead of the question form until the check passes. Verification lasts
 `TURNSTILE_VERIFIED_MINUTES` (default and maximum 60) per session; signed-in callers are never
-challenged. Budget reservations are not
-implemented, so still do not expose this application to other users. Real prompts,
+challenged. Live runs also share a daily spend budget: `GLOBAL_DAILY_BUDGET_USD` (default 5) is
+reserved before each model or paid-tool call and settled afterwards, with the worst-case amount
+and one SDK retry covered up front. Exhausted budget returns 503 `budget_exhausted`; too many
+concurrent runs return 429 `too_many_active_runs`. These are conservative local estimates, not
+a provider billing guarantee, so still do not expose this application to other users. Real
+prompts,
 assistant/tool messages
 and agent state are persisted for live conversations; demo output is never checkpointed.
 Anonymous threads expire after 24 hours; physical deletion requires the cleanup command.
@@ -83,8 +87,9 @@ transcript. Interrupted threads are not resumed automatically; use a new thread.
 `DEFAULT_MODEL=gpt-6-luna`. The server-owned allowlist lives in
 `backend/src/research_agent/models.toml`; the UI selects among enabled models
 per request. Additional models are disabled until account access is verified.
-Prices in the catalog are estimates, **not an implemented budget enforcement mechanism**.
-Do not enable expensive models before the budget-reservation milestone.
+Prices in the catalog are unverified estimates used by the daily budget reservations, which
+are conservative local estimates and **not a provider billing guarantee**. A model or tool
+without a price is never offered in live mode. Verify prices before enabling expensive models.
 
 ## What works
 
@@ -109,13 +114,16 @@ Do not enable expensive models before the budget-reservation milestone.
   only when they fit, refunded when admission fails, and reported in a `quota` stream event.
 - Cloudflare Turnstile human verification for anonymous callers, validated server-side with
   fail-closed handling and a bounded per-session window (signed-in users are not challenged).
+- A shared daily budget with reserve-then-settle accounting (model and paid-tool calls, one
+  SDK retry covered), crash expiry and conservative reconciliation, plus run concurrency caps.
 
 ## Planned launch features
 
 Hybrid access: anonymous users pass Turnstile and get a small daily quota; GitHub
 users get more quota and saved-history browsing. PostgreSQL already stores development
 threads and runs, development sessions/GitHub sign-in exist, and shared rate limits, daily
-quotas and Turnstile are implemented; atomic cost reservations are **not implemented**.
+quotas, Turnstile, the daily budget and concurrency caps are implemented. Scheduled cleanup
+and the remaining launch gates are **not implemented**.
 Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
 ## Checks

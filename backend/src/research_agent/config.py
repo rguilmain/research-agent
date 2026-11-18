@@ -2,12 +2,15 @@
 
 import logging
 import secrets
+from decimal import Decimal
 from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
+
+from research_agent.catalog import load_tool_prices
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,10 @@ class Settings(BaseSettings):
     turnstile_secret_key: SecretStr = SecretStr("")
     turnstile_verified_minutes: int = 60
     rate_limit_turnstile_per_hour: int = 30
+    global_daily_budget_usd: Decimal = Decimal("5")
+    budget_reservation_ttl_minutes: int = 10
+    max_active_runs: int = 20
+    max_active_runs_per_principal: int = 2
 
     @property
     def login_enabled(self) -> bool:
@@ -180,6 +187,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"TURNSTILE_VERIFIED_MINUTES must be between 1 and {MAX_TURNSTILE_VERIFIED_MINUTES}"
             )
+        if self.global_daily_budget_usd <= 0:
+            raise ValueError("GLOBAL_DAILY_BUDGET_USD must be positive")
+        if self.budget_reservation_ttl_minutes * 60 <= self.run_timeout_s:
+            # An open reservation must outlive the run that owns it, or a settlement race
+            # would double-charge the day: expiry moves the reserved amount into spent.
+            raise ValueError("BUDGET_RESERVATION_TTL_MINUTES must exceed RUN_TIMEOUT_S")
+        if min(self.max_active_runs, self.max_active_runs_per_principal) <= 0:
+            raise ValueError("Concurrency limits must be positive")
+        if self.max_active_runs_per_principal > self.max_active_runs:
+            raise ValueError("MAX_ACTIVE_RUNS_PER_PRINCIPAL cannot exceed MAX_ACTIVE_RUNS")
         return self
 
 
@@ -202,4 +219,8 @@ def production_readiness_errors(settings: Settings) -> list[str]:
         errors.append("TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are not configured")
     elif settings.turnstile_secret_key.get_secret_value() in TURNSTILE_TEST_SECRETS:
         errors.append("TURNSTILE_SECRET_KEY is a Cloudflare test key")
+    if settings.wolfram_alpha_appid.get_secret_value() and "wolfram_alpha" not in (
+        load_tool_prices()
+    ):
+        errors.append("WOLFRAM_ALPHA_APPID is configured without a price in models.toml")
     return errors

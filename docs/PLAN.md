@@ -44,8 +44,8 @@
     The local PostgreSQL suite and Docker smoke had already passed locally; a real GitHub
     OAuth round trip has never been performed. See the M4a session notes.
 - [ ] M5: abuse protection and cost control. Done: shared SQL rate limits (M5a), daily
-  weighted quotas (M5b-1) and Turnstile human verification (M5b-2). Open: shared concurrency
-  caps, global budget reservations and settlement (M5c).
+  weighted quotas (M5b-1), Turnstile human verification (M5b-2) and the daily budget with
+  concurrency caps (M5c). Remaining launch work is scheduled cleanup and deployment gates.
   - [x] M5a: shared PostgreSQL fixed-window admission limits keyed by hashed client address,
     session principal and login start, returning 429 problem JSON with `Retry-After` before
     any row is created. Landed as commit `5eca4cb`; CI run `44187038198` observed successful
@@ -61,8 +61,9 @@
   - [x] M5b-2: Cloudflare Turnstile server validation with the browser widget and a bounded
     "verified human" window stored on the anonymous session. Verified offline with respx and
     the documented public test keys only; no real Cloudflare request and no CI observed.
-  - [ ] M5c: shared concurrency caps and the global daily budget with atomic reservations and
-    settlement, including SDK retries.
+  - [x] M5c: global daily budget with reserve-then-settle accounting, crash expiry, a
+    fail-closed admission floor, and shared run concurrency caps. Verified locally with
+    synthetic providers and a real PostgreSQL database; no live provider comparison and no CI.
 - [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
   sign-in, Turnstile, persisted theme, accessibility and privacy/data deletion screens.
 - [ ] M7: same-origin production static serving, non-root multi-stage Docker image,
@@ -82,14 +83,45 @@ Historical dependency triage is recorded below. Current next slices:
 M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful) and so is M5a
 (commit `5eca4cb`, CI run `44187038198` observed successful).
 
-1. M5c: shared concurrency caps and the global daily budget with atomic reservations and
-   settlement, including SDK retries.
-2. M3b remainder is small: scheduled/operational cleanup and any side-by-side history
-   polish. Resume of interrupted threads remains intentionally unimplemented.
+1. M3b remainder: scheduled/operational cleanup (the cleanup command is still manual) and
+   any side-by-side history polish. Resume of interrupted threads stays unimplemented.
+2. Launch gates before any public deployment: M7 security hardening (including the Turnstile
+   CSP allowance in docs/ARCHITECTURE.md), M8 accessibility/privacy screens, M9 production
+   database and Fly.io provisioning with approval, M10 go-live checklist.
 3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M5c budget and concurrency session — November 17, 2026
+
+- Implemented: migration `0006_budget` (`budget_days` totals plus a `budget_reservations`
+  ledger); `budget.py` (`BudgetLedger`, `BudgetStore`, `BudgetExhausted`); catalog money
+  helpers (`ceil_usd`, `conservative_model_cost`, `model_call_reservation`) and a tool price
+  table in `models.toml`; `Repository.reserve_budget`/`settle_budget`/`settle_open_for_run`/
+  `expire_stale_reservations`/`budget_headroom`/`cleanup_budget_reservations`; run concurrency
+  caps inside `start_run`; guard-level charging in `ModelGuards`/`ToolGuards`; 503
+  `budget_exhausted` and 429 `too_many_active_runs` problems; a `budget_exhausted` stream error.
+- Design choices: one conditional upsert raises the day's reserved total only while
+  `reserved + spent + amount <= GLOBAL_DAILY_BUDGET_USD`, so parallel workers cannot
+  over-reserve; a model call holds the worst case for the prompt estimate, the full output
+  allowance and both SDK attempts, then settles the observed cost; missing usage, a failed
+  dispatch or a cancellation settles the full hold; a paid tool is charged its flat price even
+  when it fails; unpriced tools are never registered and are refused if they are called; the
+  admission floor check runs after rate limits and before quotas, so a refused request costs
+  nothing; a transaction-scoped advisory lock serializes run admission; only runs with a
+  heartbeat inside two minutes count toward the caps; demo mode spends nothing.
+- Observed locally: ruff/format/pyright clean; offline pytest 196 passed / 56 skipped
+  (18 in `test_budget.py`); `REQUIRE_PG=1` pytest 252 passed (9 in `test_budget_pg.py`);
+  frontend lint, typecheck, 55 tests and build passed; `scripts/smoke-docker.ps1` passed.
+- NOT verified: any comparison with a real provider invoice, Tavily's per-call price (a local
+  unverified estimate), live budget exhaustion, and CI. Production stays blocked.
+- Known limitations: these are estimates, not billing guarantees; a retried attempt inside a
+  successful call is covered by the hold but settled from the final attempt's usage only; an
+  overspend beyond a hold is recorded but cannot be prevented; concurrency depends on
+  heartbeat freshness; budget detail rows are pruned after 30 days while day totals remain;
+  a call refused for budget is counted in the run's usage ledger as one estimated model call
+  (conservative, never under-recorded) even though it was never dispatched.
 
 ### M5b-2 Turnstile session — November 17, 2026
 

@@ -2,6 +2,16 @@
 # Verify prices and account access before enabling additional models.
 # quota_weight is a policy weight charged against the daily question quota, not a cost.
 # Only models with anonymous = true may be selected by anonymous callers.
+# Tool prices are flat estimates used only for local budget reservations, not billing.
+
+[[tools]]
+id = "tavily_search"
+usd_per_call = "0.008"
+
+[[tools]]
+id = "wikipedia"
+usd_per_call = "0"
+
 [[models]]
 id = "gpt-6-luna"
 label = "GPT-6 Luna"

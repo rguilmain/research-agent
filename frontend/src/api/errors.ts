@@ -18,6 +18,10 @@ export function describeFailure(status: number, code?: string): string {
       return 'Human check failed. Please try again.'
     case 'turnstile_unavailable':
       return 'Human verification is temporarily unavailable. Please try again shortly.'
+    case 'budget_exhausted':
+      return 'The daily research budget has been reached. Please try again tomorrow.'
+    case 'too_many_active_runs':
+      return 'Too many research runs are in progress. Please wait a moment and try again.'
     default:
       break
   }

@@ -72,7 +72,8 @@ def truncate_all(settings: Settings) -> None:
                 await connection.execute(
                     text(
                         "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
-                        "rate_limit_counters, quota_usage, checkpoints, checkpoint_blobs, "
+                        "rate_limit_counters, quota_usage, budget_reservations, budget_days, "
+                        "checkpoints, checkpoint_blobs, "
                         "checkpoint_writes CASCADE"
                     )
                 )
@@ -95,7 +96,8 @@ async def db(pg_settings, migrated):
             await connection.execute(
                 text(
                     "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
-                    "rate_limit_counters, quota_usage, checkpoints, checkpoint_blobs, "
+                    "rate_limit_counters, quota_usage, budget_reservations, budget_days, "
+                    "checkpoints, checkpoint_blobs, "
                     "checkpoint_writes CASCADE"
                 )
             )

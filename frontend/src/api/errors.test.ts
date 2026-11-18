@@ -10,6 +10,11 @@ describe('describeFailure', () => {
     expect(describeFailure(429, 'quota_exceeded')).toContain('Daily question limit reached')
   })
 
+  it('explains the budget and concurrency refusals', () => {
+    expect(describeFailure(503, 'budget_exhausted')).toContain('daily research budget')
+    expect(describeFailure(429, 'too_many_active_runs')).toContain('Too many research runs')
+  })
+
   it('keeps the generic message for other statuses', () => {
     expect(describeFailure(503)).toBe('Request failed (503)')
   })

@@ -12,5 +12,5 @@ Use a separate GitHub OAuth app per environment and register the exact same-orig
 deployment from GitHub Actions must use a protected environment with approval and
 an app-scoped Fly deploy token, and must run only after successful CI.
 
-Test backups/restores, quotas under concurrency, crash recovery of reservations,
-proxy header trust, cancelled/abandoned runs, ownership and deletion before launch.
+Test backups/restores, quotas and budget reservations under concurrency, crash recovery of
+reservations, proxy header trust, cancelled/abandoned runs, ownership and deletion before launch.

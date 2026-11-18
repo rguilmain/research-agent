@@ -12,9 +12,13 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from research_agent.catalog import load_catalog, load_tool_prices
 from research_agent.config import Settings
 from research_agent.guards import ModelGuards, RunContext, ToolGuards
 from research_agent.tools import safe_url, tavily_query, wikipedia_query, wolfram_query
+
+# One SDK retry: the budget reservation covers both attempts.
+MAX_RETRIES = 1
 
 SYSTEM_PROMPT = """You are Research Agent, a web-search research assistant.
 Search for evidence before making current factual claims. Cite the exact source URLs
@@ -88,6 +92,9 @@ class LiveResearch:
         self.client = client
         self.agents: dict[str, Any] = {}
         self.checkpointer = checkpointer
+        self.catalog = load_catalog()
+        # A tool without a verified price is never offered, so live runs cannot run unpriced.
+        self.prices = load_tool_prices()
 
     def agent(self, model_id: str) -> Any:
         if model_id in self.agents:
@@ -124,8 +131,12 @@ class LiveResearch:
             tavily_search,
             wikipedia,
         ]
-        if self.settings.wolfram_alpha_appid.get_secret_value():
+        if (
+            self.settings.wolfram_alpha_appid.get_secret_value()
+            and self.prices.get("wolfram_alpha") is not None
+        ):
             tools.append(wolfram_alpha)
+        spec = self.catalog[model_id]
         model = ChatOpenAI(
             model=model_id,
             api_key=self.settings.openai_api_key,
@@ -133,13 +144,13 @@ class LiveResearch:
             reasoning={"effort": "low"},
             max_completion_tokens=self.settings.max_output_tokens,
             timeout=45,
-            max_retries=1,
+            max_retries=MAX_RETRIES,
             stream_usage=True,
             http_async_client=self.client,
         )
         middleware: list[AgentMiddleware[Any, Any, Any]] = [
-            ModelGuards(self.settings),
-            ToolGuards(self.settings),
+            ModelGuards(self.settings, spec, attempts=MAX_RETRIES + 1),
+            ToolGuards(self.settings, self.prices),
             ModelCallLimitMiddleware(run_limit=self.settings.max_model_calls),
             ToolCallLimitMiddleware(run_limit=self.settings.max_tool_calls, exit_behavior="end"),
         ]

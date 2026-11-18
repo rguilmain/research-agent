@@ -41,7 +41,7 @@ export function validateEvent(value: unknown): ResearchEvent {
     case 'done': valid = keys(v, ['type']); break
     case 'quota': valid = keys(v, ['type', 'limit', 'remaining']) && count(v.limit) &&
       Number(v.limit) >= 1 && count(v.remaining) && Number(v.remaining) <= Number(v.limit); break
-    case 'error': valid = keys(v, ['type', 'code', 'message', 'request_id']) && ['research_failed', 'research_timeout', 'run_limit_exceeded'].includes(String(v.code)) && text(v.message) && text(v.request_id); break
+    case 'error': valid = keys(v, ['type', 'code', 'message', 'request_id']) && ['research_failed', 'research_timeout', 'run_limit_exceeded', 'budget_exhausted'].includes(String(v.code)) && text(v.message) && text(v.request_id); break
     case 'usage': {
       const counts = ['input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens', 'reasoning_tokens', 'model_calls']
       valid = keys(v, ['type', ...counts, 'tool_calls', 'estimated']) && counts.every(k => count(v[k])) &&

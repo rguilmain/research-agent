@@ -87,7 +87,7 @@ class Database:
             checkpoint_version = await connection.scalar(
                 text("SELECT max(v) FROM checkpoint_migrations")
             )
-            if revision != "0005" or checkpoint_version != len(self.checkpointer.MIGRATIONS) - 1:
+            if revision != "0006" or checkpoint_version != len(self.checkpointer.MIGRATIONS) - 1:
                 raise RuntimeError("Database migrations are not current")
             await connection.execute(text("SELECT owner_id FROM threads LIMIT 0"))
             await connection.execute(text("SELECT heartbeat_at FROM runs LIMIT 0"))
@@ -97,3 +97,5 @@ class Database:
             await connection.execute(text("SELECT state_hash FROM oauth_states LIMIT 0"))
             await connection.execute(text("SELECT count FROM rate_limit_counters LIMIT 0"))
             await connection.execute(text("SELECT units FROM quota_usage LIMIT 0"))
+            await connection.execute(text("SELECT reserved_usd FROM budget_days LIMIT 0"))
+            await connection.execute(text("SELECT reserved_usd FROM budget_reservations LIMIT 0"))

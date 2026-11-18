@@ -93,7 +93,7 @@ class Done(Event):
 
 class Error(Event):
     type: Literal["error"]
-    code: Literal["research_failed", "research_timeout", "run_limit_exceeded"]
+    code: Literal["research_failed", "research_timeout", "run_limit_exceeded", "budget_exhausted"]
     message: ShortText
     request_id: ShortText
 

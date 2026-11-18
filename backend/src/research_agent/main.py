@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -19,16 +20,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from research_agent import __version__, quota, ratelimit
 from research_agent.auth import AuthContext, AuthError, human_verified, require_csrf
 from research_agent.auth_api import router as auth_router
-from research_agent.catalog import load_catalog
+from research_agent.budget import BudgetExhausted, BudgetLedger
+from research_agent.catalog import load_catalog, model_call_reservation
 from research_agent.config import Settings
 from research_agent.db import Database, configure_event_loop
 from research_agent.events import validate_event
-from research_agent.guards import RunContext, RunLimitExceeded
+from research_agent.guards import RunBudgetExhausted, RunContext, RunLimitExceeded
 from research_agent.logging import build_log_config
 from research_agent.quota import QuotaExceeded
 from research_agent.ratelimit import RateLimitExceeded
-from research_agent.repository import Conflict, NotFound, Repository
-from research_agent.research import DemoResearch, LiveResearch, ResearchService
+from research_agent.repository import ConcurrencyExceeded, Conflict, NotFound, Repository
+from research_agent.research import MAX_RETRIES, DemoResearch, LiveResearch, ResearchService
 from research_agent.streaming import stream_events
 from research_agent.threads_api import router as threads_router
 from research_agent.turnstile import TurnstileRequired
@@ -145,6 +147,23 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
     async def turnstile_required(request: Request, _exc: TurnstileRequired):
         return problem(request, 403, "turnstile_required", "Human verification required")
 
+    @app.exception_handler(BudgetExhausted)
+    async def budget_exhausted(request: Request, _exc: BudgetExhausted):
+        response = problem(
+            request, 503, "budget_exhausted", "Daily research budget has been reached"
+        )
+        # The budget resets at UTC midnight, the same boundary the ledger uses.
+        response.headers["Retry-After"] = str(quota.seconds_until_reset(datetime.now(UTC)))
+        return response
+
+    @app.exception_handler(ConcurrencyExceeded)
+    async def concurrency_exceeded(request: Request, _exc: ConcurrencyExceeded):
+        response = problem(
+            request, 429, "too_many_active_runs", "Too many research runs in progress"
+        )
+        response.headers["Retry-After"] = "15"
+        return response
+
     @app.exception_handler(NotFound)
     async def not_found(_request, _exc):
         return JSONResponse(status_code=404, content={"detail": "Thread not found"})
@@ -246,6 +265,17 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                     ratelimit.ip_key(secret, ratelimit.client_ip(request, config)),
                     config.rate_limit_research_per_hour,
                 )
+            if not config.demo_mode:
+                # Refuse a live run the daily budget could not cover even once. Checked before
+                # the quota so a refused request costs the caller nothing.
+                floor = model_call_reservation(
+                    spec,
+                    input_tokens=config.max_context_tokens - config.max_output_tokens,
+                    output_tokens=config.max_output_tokens,
+                    attempts=MAX_RETRIES + 1,
+                )
+                if await repo.budget_headroom(config.global_daily_budget_usd) < floor:
+                    raise BudgetExhausted()
             # Daily quotas are charged before any row exists and refunded if admission
             # below fails, so a refused request never costs a question.
             grant = await quota.consume(repo, config, request, session, spec)
@@ -257,7 +287,13 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                     )["id"]
                 await repo.get_thread(owner, thread_id)
                 await lock.enter_async_context(repo.thread_lock(thread_id))
-                run_id = await repo.start_run(owner, thread_id, model_id)
+                run_id = await repo.start_run(
+                    owner,
+                    thread_id,
+                    model_id,
+                    max_active=config.max_active_runs,
+                    max_per_principal=config.max_active_runs_per_principal,
+                )
             except BaseException:
                 with CancelScope(shield=True):
                     try:
@@ -277,7 +313,20 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
             if repo and run_id:
                 await repo.save_usage(run_id, usage)
 
-        context = RunContext(max_parallel=config.max_parallel_tool_calls, persist=persist)
+        # Demo mode spends nothing, so only a live run with persistence carries a ledger.
+        ledger = (
+            BudgetLedger(
+                repo,
+                run_id,
+                config.global_daily_budget_usd,
+                timedelta(minutes=config.budget_reservation_ttl_minutes),
+            )
+            if repo is not None and run_id is not None and not config.demo_mode
+            else None
+        )
+        context = RunContext(
+            max_parallel=config.max_parallel_tool_calls, persist=persist, budget=ledger
+        )
 
         async def stream() -> AsyncIterator[str]:
             sequence = 0
@@ -353,8 +402,13 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                     type(exc).__name__,
                 )
                 code = "research_timeout" if isinstance(exc, TimeoutError) else "research_failed"
+                message = "Research could not complete. Please try again."
                 if isinstance(exc, RunLimitExceeded):
                     code = "run_limit_exceeded"
+                    message = "This research run reached its safety limit."
+                if isinstance(exc, RunBudgetExhausted):
+                    code = "budget_exhausted"
+                    message = "The daily research budget was reached. Please try again tomorrow."
                 status, error_code = "failed", code
                 yield (
                     f"id: {request.state.request_id}:{sequence + 1}\ndata: "
@@ -363,7 +417,7 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                             {
                                 "type": "error",
                                 "code": code,
-                                "message": "Research could not complete. Please try again.",
+                                "message": message,
                                 "request_id": request.state.request_id,
                             }
                         )
@@ -376,6 +430,15 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 with CancelScope(shield=True):
                     try:
                         if repo and run_id:
+                            if ledger is not None:
+                                try:
+                                    # Anything still open is charged in full before the run ends.
+                                    await repo.settle_open_for_run(run_id)
+                                except Exception:
+                                    logger.error(
+                                        "Budget settlement failed request_id=%s",
+                                        request.state.request_id,
+                                    )
                             await repo.finish_run(run_id, status, error_code)
                     finally:
                         await lock.aclose()

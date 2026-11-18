@@ -3,17 +3,21 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import CursorResult, delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
+from research_agent.budget import BudgetExhausted
 from research_agent.config import Settings
 from research_agent.db import Database
 from research_agent.history import History, public_messages
 from research_agent.storage_models import (
     AuthSession,
+    BudgetDay,
+    BudgetReservation,
     OAuthState,
     Principal,
     QuotaUsage,
@@ -29,6 +33,12 @@ OAUTH_STATE_TTL = timedelta(minutes=10)
 # One aligned window per hour, and one extra window kept for Retry-After accuracy.
 RATE_LIMIT_WINDOW = timedelta(hours=1)
 RATE_LIMIT_RETENTION_WINDOWS = 2
+# A run whose heartbeat is older than this is treated as gone for concurrency purposes.
+ACTIVE_RUN_FRESHNESS = timedelta(minutes=2)
+# Transaction-scoped advisory lock that serializes run admission against the concurrency caps.
+RUN_ADMISSION_LOCK = 0x52_41_44_4D
+BUDGET_RESERVATION_RETENTION_DAYS = 30
+BUDGET_CLEANUP_BATCH = 1000
 
 
 @dataclass(frozen=True)
@@ -79,6 +89,10 @@ class _QuotaRefused(Exception):
     """Internal marker: a quota key is full, so the whole consume must roll back."""
 
     pass
+
+
+class ConcurrencyExceeded(Exception):
+    """Too many live runs are already in progress for the service or the caller."""
 
 
 def thread_view(thread: Thread) -> dict:
@@ -229,13 +243,35 @@ class Repository:
                     await connection.invalidate()
                     raise
 
-    async def start_run(self, owner: Identity, thread_id: UUID, model_id: str) -> UUID:
+    async def start_run(
+        self,
+        owner: Identity,
+        thread_id: UUID,
+        model_id: str,
+        max_active: int | None = None,
+        max_per_principal: int | None = None,
+    ) -> UUID:
         async with self.db.sessions.begin() as session:
             thread = await session.scalar(self.owned(owner, thread_id).with_for_update())
             if thread is None:
                 raise NotFound
             if thread.model_id != model_id or thread.demo != self.settings.demo_mode:
                 raise Conflict("Thread model or mode differs; start a new thread")
+            if max_active is not None or max_per_principal is not None:
+                # A transaction-scoped lock serializes admission, so parallel workers cannot
+                # both read a count below the cap and then both start a run.
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": RUN_ADMISSION_LOCK}
+                )
+                live = (Run.status == "running", Run.heartbeat_at > now() - ACTIVE_RUN_FRESHNESS)
+                active = await session.scalar(select(func.count()).select_from(Run).where(*live))
+                mine = await session.scalar(
+                    select(func.count()).select_from(Run).where(*live, Run.owner_id == owner.id)
+                )
+                if (max_active is not None and (active or 0) >= max_active) or (
+                    max_per_principal is not None and (mine or 0) >= max_per_principal
+                ):
+                    raise ConcurrencyExceeded("Too many active runs")
             previous = await session.scalar(
                 select(Run)
                 .where(Run.thread_id == thread_id)
@@ -290,6 +326,8 @@ class Repository:
             )
 
     async def recover(self) -> int:
+        # Charge abandoned budget holds before anything else so the day stays accurate.
+        await self.expire_stale_reservations()
         async with self.db.sessions() as session:
             candidates = (
                 await session.execute(
@@ -455,6 +493,156 @@ class Repository:
             result = cast(
                 "CursorResult[Any]",
                 await session.execute(delete(QuotaUsage).where(QuotaUsage.day < cutoff)),
+            )
+            return result.rowcount or 0
+
+    async def reserve_budget(
+        self,
+        run_id: UUID | None,
+        kind: str,
+        amount: Decimal,
+        limit: Decimal,
+        ttl: timedelta,
+    ) -> UUID:
+        """Atomically hold ``amount`` for one paid operation, or raise BudgetExhausted.
+
+        The day total is raised only while ``reserved + spent + amount`` still fits the limit,
+        so parallel workers cannot over-reserve. A refusal changes nothing at all.
+        """
+        if amount > limit:
+            raise BudgetExhausted("Reservation exceeds the whole daily budget")
+        day = now().date()
+        async with self.db.sessions.begin() as session:
+            raised = (
+                await session.execute(
+                    insert(BudgetDay)
+                    .values(day=day, reserved_usd=amount, spent_usd=Decimal(0), updated_at=now())
+                    .on_conflict_do_update(
+                        index_elements=[BudgetDay.day],
+                        set_={
+                            "reserved_usd": BudgetDay.reserved_usd + amount,
+                            "updated_at": now(),
+                        },
+                        where=BudgetDay.reserved_usd + BudgetDay.spent_usd + amount <= limit,
+                    )
+                    .returning(BudgetDay.day)
+                )
+            ).scalar_one_or_none()
+            if raised is None:
+                raise BudgetExhausted("Daily budget exhausted")
+            reservation = BudgetReservation(
+                run_id=run_id,
+                day=day,
+                kind=kind,
+                reserved_usd=amount,
+                status="open",
+                created_at=now(),
+                expires_at=now() + ttl,
+            )
+            session.add(reservation)
+            await session.flush()
+            return reservation.id
+
+    async def settle_budget(
+        self, reservation_id: UUID, actual: Decimal, status: str = "settled"
+    ) -> None:
+        """Charge a held reservation once; a second call is a no-op.
+
+        The hold is released and ``actual`` is added to the day's spent total. ``actual`` may
+        exceed the hold (an upstream bill can outgrow our estimate); the overflow is recorded.
+        """
+        if status not in {"settled", "expired"}:
+            raise ValueError("Invalid budget settlement status")
+        async with self.db.sessions.begin() as session:
+            row = (
+                await session.execute(
+                    update(BudgetReservation)
+                    .where(
+                        BudgetReservation.id == reservation_id, BudgetReservation.status == "open"
+                    )
+                    .values(status=status, actual_usd=actual, settled_at=now())
+                    .returning(BudgetReservation.day, BudgetReservation.reserved_usd)
+                )
+            ).first()
+            if row is None:
+                return
+            await session.execute(
+                update(BudgetDay)
+                .where(BudgetDay.day == row.day)
+                .values(
+                    reserved_usd=func.greatest(BudgetDay.reserved_usd - row.reserved_usd, 0),
+                    spent_usd=BudgetDay.spent_usd + actual,
+                    updated_at=now(),
+                )
+            )
+
+    async def settle_open_for_run(self, run_id: UUID) -> int:
+        """Charge every still-open reservation for a run at its full held amount."""
+        async with self.db.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(BudgetReservation.id, BudgetReservation.reserved_usd).where(
+                        BudgetReservation.run_id == run_id,
+                        BudgetReservation.status == "open",
+                    )
+                )
+            ).all()
+        for reservation_id, reserved in rows:
+            await self.settle_budget(reservation_id, reserved)
+        return len(rows)
+
+    async def expire_stale_reservations(self) -> int:
+        """Charge abandoned holds whose worker died, newest first, at most one batch."""
+        async with self.db.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(BudgetReservation.id, BudgetReservation.reserved_usd)
+                    .where(
+                        BudgetReservation.status == "open",
+                        BudgetReservation.expires_at < now(),
+                    )
+                    .limit(100)
+                )
+            ).all()
+        for reservation_id, reserved in rows:
+            await self.settle_budget(reservation_id, reserved, status="expired")
+        return len(rows)
+
+    async def budget_headroom(self, limit: Decimal) -> Decimal:
+        """Remaining spendable amount for today; a missing day row means the full budget."""
+        async with self.db.sessions() as session:
+            row = await session.scalar(
+                select(BudgetDay.reserved_usd + BudgetDay.spent_usd).where(
+                    BudgetDay.day == now().date()
+                )
+            )
+        committed = row if isinstance(row, Decimal) else Decimal(0)
+        return max(limit - committed, Decimal(0))
+
+    async def cleanup_budget_reservations(self) -> int:
+        """Delete closed reservation rows older than the retention window, one bounded batch.
+
+        Day totals stay: they are the spending ledger. Only the per-operation detail expires.
+        """
+        cutoff = now() - timedelta(days=BUDGET_RESERVATION_RETENTION_DAYS)
+        async with self.db.sessions.begin() as session:
+            ids = (
+                await session.scalars(
+                    select(BudgetReservation.id)
+                    .where(
+                        BudgetReservation.status != "open",
+                        BudgetReservation.created_at < cutoff,
+                    )
+                    .limit(BUDGET_CLEANUP_BATCH)
+                )
+            ).all()
+            if not ids:
+                return 0
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(
+                    delete(BudgetReservation).where(BudgetReservation.id.in_(ids))
+                ),
             )
             return result.rowcount or 0
 
@@ -716,4 +904,5 @@ class Repository:
         # Counters expire on their own schedule and must never accumulate without bound.
         removed += await self.cleanup_rate_limits()
         removed += await self.cleanup_quotas()
+        removed += await self.cleanup_budget_reservations()
         return removed

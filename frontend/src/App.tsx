@@ -115,7 +115,7 @@ export default function App() {
             <Button size="small" variant="outlined" href={loginUrl('/')}>Sign in with GitHub</Button> :
             <Chip label="Development" variant="outlined" />}
       </Stack>
-      <Alert severity="warning" sx={{ mb: 3 }}>Not ready for public deployment. Budget limits and scheduled cleanup are not implemented.</Alert>
+      <Alert severity="warning" sx={{ mb: 3 }}>Not ready for public deployment. Scheduled cleanup and launch security reviews are pending.</Alert>
       {demo === true && <Alert severity="info" sx={{ mb: 3 }}>Demo mode — no paid APIs or real web searches.</Alert>}
       {authError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setAuthError(false)}>
         GitHub sign-in did not complete. Please try again.</Alert>}

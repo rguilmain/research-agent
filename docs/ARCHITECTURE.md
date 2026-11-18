@@ -31,13 +31,14 @@ Final-message usage is counted once, never from streamed chunks/updates; cached 
 reasoning are subsets. Missing usage is flagged and estimated conservatively. With a
 database, in-flight conservative usage is persisted before each model dispatch and
 replaced by final observed usage. Failures/cancellations retain estimates; this is NOT
-a billing guarantee or monetary reservation. Atomic budget reservations remain M5.
-SDK retries remain bounded to one; future budget reservations must cover both attempts.
+a billing guarantee. SDK retries remain bounded to one, and a model reservation covers both
+attempts.
 Strict Pydantic SSE payload validation and corresponding browser runtime checks reject
 unknown fields/types/tools, unsafe source URLs, invalid usage totals and oversized frames.
 
-PostgreSQL persistence exists for local development; authentication, cost enforcement
-and public deployment do not.
+PostgreSQL persistence exists for local development; development identity, rate limits,
+quotas and Turnstile exist; budget reservations, concurrency caps and public deployment
+do not.
 APP_ENV=production fails validation intentionally. Demo mode is not an auth bypass
 for eventual production: production must never allow it.
 
@@ -106,7 +107,7 @@ otherwise the rightmost `X-Forwarded-For` hop, the only entry a client cannot fo
 single trusted ingress. That assumption must be re-verified against the real Fly ingress in
 M9. A process without a database is not limited, which is development-only behavior. Known
 limits: fixed windows allow a brief boundary burst and address limits do not stop distributed
-abuse; monetary reservations remain M5.
+abuse; scheduled cleanup remains.
 
 Daily quotas (M5b-1): `quota_usage` holds one weighted-unit counter per scope, HMAC key and
 UTC day. A conditional upsert (`... WHERE units + n <= limit RETURNING units`) adds units
@@ -118,8 +119,30 @@ selectable anonymously). Quota is charged after the M5a rate limits and before a
 a request refused during admission is refunded, but a run that fails after admission is not.
 Refusals return 429 `problem+json` (`code: quota_exceeded`) with `Retry-After` in seconds until
 the next UTC midnight, and an accepted run emits a bounded `quota` SSE event reporting the
-remaining allowance. This is a policy limiter, not a monetary reservation; the global daily
-budget with atomic reservations and concurrency caps remain M5.
+remaining allowance. This is a policy limiter, not a monetary reservation; spend is capped
+separately by the budget below.
+
+Daily budget and concurrency (M5c): `budget_days` holds one row per UTC day with a reserved
+total and a settled total, and `budget_reservations` is a ledger with one row per paid
+operation (`model` or `tool`). Before every model dispatch the guard holds a worst case: the
+conservative prompt estimate, the full output allowance, and both SDK attempts, priced with an
+unknown cached price billed as ordinary input. Before a paid tool call it holds that tool's
+flat price from `models.toml`. Only one conditional upsert raises the day's reserved total, and
+only while `reserved + spent + amount <= GLOBAL_DAILY_BUDGET_USD`, so parallel workers cannot
+over-reserve. Settlement releases the hold and records the charge once; it is idempotent.
+Observed usage settles the real cost, while missing usage, a failed dispatch or a cancellation
+settles the full hold. A hold whose worker died is charged in full when it expires, and any
+hold still open when a run ends is settled by the request itself. A live run is refused with
+503 `budget_exhausted` when today's remaining budget could not cover one worst-case call; the
+check runs after rate limits and before quotas, so a refused request consumes neither quota nor
+money. Tools and models without a verified price are never offered in live mode, and demo mode
+records no spend. Run admission additionally enforces `MAX_ACTIVE_RUNS` and
+`MAX_ACTIVE_RUNS_PER_PRINCIPAL` while holding a transaction-scoped advisory lock, counting only
+runs whose heartbeat is inside two minutes, and refuses over-limit requests with 429
+`too_many_active_runs`. These amounts are local estimates and never a provider billing
+guarantee: an overspend beyond a hold is recorded but cannot be prevented, and a retried
+attempt inside a successful call is covered by the hold but settled from the final attempt's
+usage only.
 
 Human verification (M5b-2): `auth_sessions.human_verified_until` records a successful
 Turnstile check on an anonymous session. Anonymous research is refused with 403
@@ -147,8 +170,8 @@ History rendering remains M6; resume is not implemented.
 A dedicated SQL connection holds a session advisory lock per thread while streaming;
 row locks and a unique active-run index additionally serialize run admission. Conflicts
 return 409 before SSE headers. Locks require direct/session-mode PostgreSQL connections,
-NOT transaction-mode proxies. Pool capacity bounds this foundation; shared admission,
-explicit global concurrency controls, and budgets remain M5. Failed/cancelled/abandoned
+NOT transaction-mode proxies. Pool capacity bounds this foundation; run admission also
+enforces shared concurrency caps (M5c). Failed/cancelled/abandoned
 threads reject new runs rather than replaying potentially unfinished tool operations.
 
 Model middleware writes estimated in-flight usage before provider dispatch and observed
@@ -156,8 +179,8 @@ final usage afterwards. Tool admission counts are persisted too; concurrent writ
 serialized per run. Terminal status is saved before `done`. Disconnect bookkeeping is
 shielded from AnyIO cancellation. Recovery marks stale runs (>5 minutes, batch 100) as
 abandoned only if their thread lock is free. A worker retaining a lock is never reclaimed.
-SDK retries remain bounded but are NOT separately accounted/reserved; monetary crash
-reconciliation is not solved by this token ledger and remains a production blocker.
+Token usage is a ledger for visibility and context safety, not a monetary record; spend is
+tracked separately by the M5c budget tables below.
 
 Anonymous thread expiry defaults to 24 hours from creation; user-kind retention defaults
 to 30 days. Access expires immediately, while physical deletion requires the explicit

@@ -1,6 +1,7 @@
 """Application-owned metadata, separate from LangGraph's versioned checkpoint schema."""
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -12,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     text,
 )
@@ -133,6 +135,49 @@ class QuotaUsage(Base):
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     units: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class BudgetDay(Base):
+    """One row per UTC day holding the reserved and settled spend totals.
+
+    ``reserved_usd`` is the sum of open reservations; ``spent_usd`` is the sum of settled
+    and expired charges. A daily admission check reads the difference, and a single conditional
+    upsert raises ``reserved_usd`` only while the day still has room.
+    """
+
+    __tablename__ = "budget_days"
+    __table_args__ = (CheckConstraint("reserved_usd >= 0 AND spent_usd >= 0"),)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal(0))
+    spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal(0))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class BudgetReservation(Base):
+    """One paid operation's worst-case hold, settled or expired exactly once.
+
+    Money is stored to six decimal places and always rounded up. A reservation whose worker
+    died stays ``open`` until its expiry passes, so the day can be reconciled conservatively.
+    """
+
+    __tablename__ = "budget_reservations"
+    __table_args__ = (
+        CheckConstraint("kind IN ('model', 'tool')"),
+        CheckConstraint("status IN ('open', 'settled', 'expired')"),
+        CheckConstraint("reserved_usd >= 0 AND (actual_usd IS NULL OR actual_usd >= 0)"),
+        Index("ix_budget_reservations_open", "status", "expires_at"),
+        Index("ix_budget_reservations_run", "run_id"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    run_id: Mapped[UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+    day: Mapped[date] = mapped_column(Date)
+    kind: Mapped[str] = mapped_column(String(16))
+    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal(0))
+    actual_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Run(Base):

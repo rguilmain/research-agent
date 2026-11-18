@@ -73,7 +73,8 @@ def migrated(pg_settings):
 
 TRUNCATE = (
     "TRUNCATE users, auth_sessions, oauth_states, principals, threads, runs, "
-    "rate_limit_counters, quota_usage, checkpoints, checkpoint_blobs, "
+    "rate_limit_counters, quota_usage, budget_reservations, budget_days, "
+    "checkpoints, checkpoint_blobs, "
     "checkpoint_writes CASCADE"
 )
 
@@ -160,7 +161,8 @@ async def test_migration_records_human_verification_column(db):
                 "WHERE table_name = 'auth_sessions' AND column_name = 'human_verified_until'"
             )
         )
-    assert revision == "0005"
+    # The fixtures always migrate this dedicated database to the current head revision.
+    assert revision == "0006"
     assert column == "human_verified_until"
 
 

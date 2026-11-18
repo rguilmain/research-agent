@@ -73,4 +73,16 @@ describe('HumanCheck', () => {
     view.unmount()
     expect(widget.remove).toHaveBeenCalledWith('widget-1')
   })
+
+  it('keeps the widget alive when the parent re-renders with a new callback', async () => {
+    const widget = stubWidget()
+    const api = window.turnstile!
+    const renderSpy = vi.spyOn(api, 'render')
+    const view = render(<HumanCheck siteKey="1x00000000000000000000AA" onVerified={vi.fn()} />)
+    await waitFor(() => expect(widget.options).not.toBeNull())
+    view.rerender(<HumanCheck siteKey="1x00000000000000000000AA" onVerified={vi.fn()} />)
+    await act(async () => { await Promise.resolve() })
+    expect(renderSpy).toHaveBeenCalledTimes(1)
+    expect(widget.remove).not.toHaveBeenCalled()
+  })
 })

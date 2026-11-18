@@ -11,6 +11,13 @@ const FAILED = 'Human check failed. Please try again or sign in.'
 export default function HumanCheck({ siteKey, onVerified }: Props) {
   const container = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<Status>('loading')
+  // The widget must survive parent re-renders: a fresh callback prop would otherwise
+  // tear the widget down and discard a challenge the visitor was still solving.
+  const onVerifiedRef = useRef(onVerified)
+
+  useEffect(() => {
+    onVerifiedRef.current = onVerified
+  })
 
   useEffect(() => {
     let active = true
@@ -25,7 +32,7 @@ export default function HumanCheck({ siteKey, onVerified }: Props) {
           callback: (token: string) => {
             setStatus('verifying')
             void verifyHuman(token)
-              .then(() => { if (active) { setStatus('ready'); onVerified() } })
+              .then(() => { if (active) { setStatus('ready'); onVerifiedRef.current() } })
               .catch(() => { if (!active) return; setStatus('error'); if (widgetId) api.reset(widgetId) })
           },
           'error-callback': () => { if (active) setStatus('error') },
@@ -38,7 +45,7 @@ export default function HumanCheck({ siteKey, onVerified }: Props) {
       active = false
       if (widgetId && window.turnstile) window.turnstile.remove(widgetId)
     }
-  }, [siteKey, onVerified])
+  }, [siteKey])
 
   return (
     <Paper variant="outlined" sx={{ p: 2, mt: 3 }}>

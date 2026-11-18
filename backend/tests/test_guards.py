@@ -10,6 +10,10 @@ from research_agent.catalog import estimate_model_cost, load_catalog
 from research_agent.config import Settings
 from research_agent.guards import ModelGuards, RunContext, RunLimitExceeded, ToolGuards
 
+# A free tool and a paid tool; a tool absent here is refused by the guard.
+PRICES = {"wikipedia": Decimal("0"), "tavily_search": Decimal("0.008")}
+LUNA = load_catalog()["gpt-6-luna"]
+
 
 def request(context, query="question", name="wikipedia", **extra):
     return SimpleNamespace(
@@ -19,7 +23,7 @@ def request(context, query="question", name="wikipedia", **extra):
 
 
 async def test_parallel_duplicates_are_rejected_and_runs_are_isolated():
-    guard = ToolGuards(Settings())
+    guard = ToolGuards(Settings(), PRICES)
     count = 0
 
     async def handler(req):
@@ -44,13 +48,15 @@ async def test_invalid_input_never_executes(query):
     async def handler(req):
         pytest.fail("Invalid call executed")
 
-    result = await ToolGuards(Settings()).awrap_tool_call(request(RunContext(), query), handler)
+    result = await ToolGuards(Settings(), PRICES).awrap_tool_call(
+        request(RunContext(), query), handler
+    )
     assert "rejected" in result.content
 
 
 async def test_concurrency_bound_and_valid_json_output():
     active = peak = 0
-    guard = ToolGuards(Settings(max_tool_output_chars=100))
+    guard = ToolGuards(Settings(max_tool_output_chars=100), PRICES)
     ctx = RunContext(max_parallel=2)
 
     async def handler(req):
@@ -76,13 +82,13 @@ async def test_non_json_oversize_output_dropped():
     async def handler(req):
         return ToolMessage(content="x" * 7000, tool_call_id="call")
 
-    result = await ToolGuards(Settings()).awrap_tool_call(request(RunContext()), handler)
+    result = await ToolGuards(Settings(), PRICES).awrap_tool_call(request(RunContext()), handler)
     assert result.content == "Tool output exceeded its size limit."
 
 
 async def test_usage_counts_each_call_once_and_details_are_subsets():
     ctx = RunContext()
-    guard = ModelGuards(Settings())
+    guard = ModelGuards(Settings(), LUNA)
     req = SimpleNamespace(
         runtime=SimpleNamespace(context=ctx),
         system_message=None,
@@ -117,7 +123,7 @@ async def test_usage_counts_each_call_once_and_details_are_subsets():
 async def test_missing_usage_estimated_and_cumulative_context_rejected():
     ctx = RunContext()
     settings = Settings(max_output_tokens=10, max_run_input_tokens=150, max_context_tokens=200)
-    guard = ModelGuards(settings)
+    guard = ModelGuards(settings, LUNA)
     req = SimpleNamespace(
         runtime=SimpleNamespace(context=ctx),
         system_message=None,

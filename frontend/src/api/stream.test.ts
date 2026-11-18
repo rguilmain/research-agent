@@ -28,6 +28,12 @@ describe('SSE parser', () => {
     expect(() => validateEvent({ ...event, limit: 0, remaining: 0 })).toThrow()
     expect(() => validateEvent({ ...event, extra: 1 })).toThrow()
   })
+  it('accepts the budget error code and rejects codes the server cannot send', () => {
+    const event = { type: 'error', code: 'budget_exhausted', message: 'Budget reached', request_id: 'r' }
+    expect(validateEvent(event)).toEqual(event)
+    expect(() => validateEvent({ ...event, code: 'made_up' })).toThrow()
+  })
+
   it('handles split frames, CRLF, keepalive comments, and multibyte text', async () => {
     const bytes = new TextEncoder().encode(': heartbeat\r\n\r\ndata: {"type":"token","text":"café"}\r\n\r\ndata: {"type":"done"}\n\n')
     const stream = new ReadableStream<Uint8Array>({ start(controller) {

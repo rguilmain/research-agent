@@ -31,12 +31,17 @@
   - [x] M3a: local/CI PostgreSQL, explicit packaged migrations, owner-scoped metadata APIs,
     durable run/usage records, checkpointed live turns, per-thread exclusion, manual cleanup.
     Verified locally and in CI run 43825899521 (b535d8e). Production DB remains M9.
-  - [ ] M3b: history presentation/resume UX, retention scheduling and operational hardening.
-    Interrupted threads intentionally require a new thread; no automatic tool replay.
+  - [x] M3b: history presentation and retention scheduling. Resume of interrupted threads
+    intentionally stays unimplemented; a new thread is required.
     - [x] M3b (partial): saved-history API and sidebar, reopening saved threads,
       query-derived titles, cleanup of newly created empty threads after failed run
-      admission, and a bounded multi-batch cleanup option. Scheduled cleanup and
-      resume stay out of scope. Covered by the CI PostgreSQL suite (see run `44181979216`).
+      admission, and a bounded multi-batch cleanup option. Covered by the CI PostgreSQL
+      suite (see run `44181979216`).
+    - [x] M3b-final: in-process scheduled cleanup every `CLEANUP_INTERVAL_MINUTES`
+      (default 15, 0 disables) with a session advisory lock (`MAINTENANCE_LOCK`) so only one
+      process cleans up at a time; the manual command takes the same lock. Failure isolation
+      logs the exception class only and keeps the schedule alive. No new dependencies,
+      migrations or endpoints. See the M3b-final session notes.
 - [ ] M4: server-side GitHub OAuth (state, PKCE if supported), opaque hashed sessions,
   secure cookies, CSRF, restricted redirects, session rotation/logout, anonymous thread claim.
   - [x] M4a: implemented with migration 0002_identity; landed as commit `2d59afc` with CI run
@@ -44,8 +49,9 @@
     The local PostgreSQL suite and Docker smoke had already passed locally; a real GitHub
     OAuth round trip has never been performed. See the M4a session notes.
 - [ ] M5: abuse protection and cost control. Done: shared SQL rate limits (M5a), daily
-  weighted quotas (M5b-1), Turnstile human verification (M5b-2) and the daily budget with
-  concurrency caps (M5c). Remaining launch work is scheduled cleanup and deployment gates.
+  weighted quotas (M5b-1), Turnstile human verification (M5b-2), the daily budget with
+  concurrency caps (M5c) and scheduled cleanup (M3b-final). Remaining launch work is the
+  deployment gates.
   - [x] M5a: shared PostgreSQL fixed-window admission limits keyed by hashed client address,
     session principal and login start, returning 429 problem JSON with `Retry-After` before
     any row is created. Landed as commit `5eca4cb`; CI run `44187038198` observed successful
@@ -60,10 +66,13 @@
       demo process with a database also charges quota.
   - [x] M5b-2: Cloudflare Turnstile server validation with the browser widget and a bounded
     "verified human" window stored on the anonymous session. Verified offline with respx and
-    the documented public test keys only; no real Cloudflare request and no CI observed.
+    the documented public test keys only; no real Cloudflare request was made. Landed as
+    commit `959bdda`; CI run `44199641545` later observed successful (backend with
+    REQUIRE_PG=1, frontend, Docker smoke).
   - [x] M5c: global daily budget with reserve-then-settle accounting, crash expiry, a
     fail-closed admission floor, and shared run concurrency caps. Verified locally with
-    synthetic providers and a real PostgreSQL database; no live provider comparison and no CI.
+    synthetic providers and a real PostgreSQL database; no live provider comparison. Landed
+    as commit `327357c`; CI run `44206137733` later observed successful.
 - [ ] M6: multi-turn UX, saved history/sidebar, model access tiers, quota badge,
   sign-in, Turnstile, persisted theme, accessibility and privacy/data deletion screens.
 - [ ] M7: same-origin production static serving, non-root multi-stage Docker image,
@@ -78,20 +87,51 @@
 
 ## Next agent: begin here
 
-Historical dependency triage is recorded below. Current next slices:
+M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful), M5a is landed
+(commit `5eca4cb`, CI run `44187038198` observed successful), and M5b-1/M5b-2/M5c are landed
+with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bdda`,
+`44206137733` on `327357c`). M3b now includes in-process scheduled cleanup.
 
-M4a is landed (commit `2d59afc`, CI run `44181979216` observed successful) and so is M5a
-(commit `5eca4cb`, CI run `44187038198` observed successful).
-
-1. M3b remainder: scheduled/operational cleanup (the cleanup command is still manual) and
-   any side-by-side history polish. Resume of interrupted threads stays unimplemented.
-2. Launch gates before any public deployment: M7 security hardening (including the Turnstile
+1. Launch gates before any public deployment: M7 security hardening (including the Turnstile
    CSP allowance in docs/ARCHITECTURE.md), M8 accessibility/privacy screens, M9 production
    database and Fly.io provisioning with approval, M10 go-live checklist.
+2. Optional next slice: M6 multi-turn UX polish (persisted theme, quota badge placement,
+   accessibility and privacy/data-deletion screens). Resume of interrupted threads stays
+   unimplemented.
 3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+Historical dependency triage is recorded below. Current next slices:
+
+### M3b-final scheduled cleanup session — November 17, 2026
+
+- Implemented: `CLEANUP_INTERVAL_MINUTES` (default 15, 0 disables, validated 0-1440);
+  `Repository.maintenance_lock` (session advisory lock `MAINTENANCE_LOCK`) plus the earlier
+  `thread_lock`-style release path; `maintenance.cleanup_batches` shared by the CLI and the
+  scheduler; `maintenance.scheduled_cleanup_pass` (returns None when another process holds
+  the lock) and `maintenance.periodic_cleanup`; the lifespan starts one cleanup task when a
+  database is configured and cancels it before the pool closes (`app.state.cleanup_task`).
+- Design choices: no pass runs at startup (startup already calls `recover()`); each pass is
+  one bounded batch; a failing pass is logged by exception class only and the schedule keeps
+  running (cancellation propagates for shutdown); the CLI takes the same lock and exits with
+  a clear message if a pass is already running; no new dependencies, migrations or endpoints.
+- Test note: a connection returned to the pool can be handed to the same process again, and a
+  PostgreSQL session advisory lock is re-entrant for the session that already holds it, so the
+  lock holder now holds an open transaction to pin its connection. Covered by
+  `test_maintenance_lock_is_exclusive`.
+- Observed locally: ruff check/format clean; pyright 0 errors; offline pytest 202 passed /
+  59 skipped (7 in `test_maintenance.py`); `REQUIRE_PG=1` pytest 261 passed (3 new PostgreSQL
+  tests); `scripts/smoke-docker.ps1` passed (image safety, packaged migrations, HTTP health,
+  demo SSE; the demo container has no database, so no cleanup task starts there).
+- NOT verified: CI, a multi-worker or multi-machine deployment, and any live provider call.
+  No frontend or dependency changes, so frontend checks and `uv sync --locked` were not re-run.
+  Production stays blocked.
+- Limitations: the schedule lives inside the web process rather than a separate cron; one pass
+  drains at most 100 rows per category, so a large backlog needs several intervals or
+  `--max-batches` by hand; a pass is skipped (not queued) while another process holds the lock;
+  shutdown cancels an in-flight pass, and its retry-safety is inherited from `cleanup`.
 
 ### M5c budget and concurrency session — November 17, 2026
 

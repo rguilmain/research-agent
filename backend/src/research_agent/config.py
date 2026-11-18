@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     thread_retention_days: int = 30
     anon_thread_ttl_hours: int = 24
     empty_thread_ttl_hours: int = 1
+    # Minutes between in-process retention cleanup passes; 0 disables the scheduler.
+    cleanup_interval_minutes: int = 15
     public_base_url: str = "http://127.0.0.1:5173"
     github_client_id: str = ""
     github_client_secret: SecretStr = SecretStr("")
@@ -128,6 +130,8 @@ class Settings(BaseSettings):
             <= 0
         ):
             raise ValueError("Retention limits must be positive")
+        if not 0 <= self.cleanup_interval_minutes <= 1440:
+            raise ValueError("CLEANUP_INTERVAL_MINUTES must be between 0 and 1440")
         if self.user_session_idle_days <= 0 or self.user_session_max_days <= 0:
             raise ValueError("Session lifetimes must be positive")
         if self.user_session_idle_days > self.user_session_max_days:

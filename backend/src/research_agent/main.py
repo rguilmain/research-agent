@@ -1,6 +1,7 @@
 """Development API. Production is fail-closed until launch controls are complete."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -27,6 +28,7 @@ from research_agent.db import Database, configure_event_loop
 from research_agent.events import validate_event
 from research_agent.guards import RunBudgetExhausted, RunContext, RunLimitExceeded
 from research_agent.logging import build_log_config
+from research_agent.maintenance import periodic_cleanup, scheduled_cleanup_pass
 from research_agent.quota import QuotaExceeded
 from research_agent.ratelimit import RateLimitExceeded
 from research_agent.repository import ConcurrencyExceeded, Conflict, NotFound, Repository
@@ -72,6 +74,23 @@ def create_app(settings: Settings | None = None, service: ResearchService | None
                 await stack.enter_async_context(db.open())
                 app.state.repository = Repository(db, config)
                 await app.state.repository.recover()
+                if config.cleanup_interval_minutes:
+                    repo = app.state.repository
+                    cleanup_task = asyncio.create_task(
+                        periodic_cleanup(
+                            lambda: scheduled_cleanup_pass(repo),
+                            config.cleanup_interval_minutes * 60,
+                        )
+                    )
+
+                    async def stop_cleanup() -> None:
+                        cleanup_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await cleanup_task
+
+                    # Registered after db.open(), so it is cancelled before the pool closes.
+                    stack.push_async_callback(stop_cleanup)
+                    app.state.cleanup_task = cleanup_task
             app.state.database = db
             app.state.research = service or (
                 DemoResearch()

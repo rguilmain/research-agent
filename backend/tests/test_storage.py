@@ -24,7 +24,7 @@ from research_agent.config import Settings
 from research_agent.db import Database
 from research_agent.guards import RunContext
 from research_agent.main import create_app
-from research_agent.maintenance import setup_checkpoints
+from research_agent.maintenance import scheduled_cleanup_pass, setup_checkpoints
 from research_agent.repository import Conflict, Identity, NotFound, Repository
 from research_agent.research import LiveResearch
 from research_agent.storage_models import Run, Thread, now
@@ -570,3 +570,44 @@ async def test_real_asgi_disconnect_finalizes_and_releases_thread(db, pg_setting
 
         async with app.state.repository.thread_lock(UUID(tid)):
             pass
+
+
+async def test_maintenance_lock_is_exclusive(db, pg_settings):
+    repo = Repository(db, pg_settings)
+    async with repo.maintenance_lock():
+        with pytest.raises(Conflict):
+            async with Repository(db, pg_settings).maintenance_lock():
+                pytest.fail("A second maintenance pass must not start")
+    async with repo.maintenance_lock():
+        pass
+
+
+async def test_scheduled_pass_skips_while_another_process_holds_the_lock(db, pg_settings, owner):
+    repo = Repository(db, pg_settings)
+    tid = (await repo.create_thread(owner, "gpt-6-luna"))["id"]
+    async with db.sessions.begin() as session:
+        await session.execute(
+            update(Thread).where(Thread.id == tid).values(expires_at=now() - timedelta(hours=1))
+        )
+    # A second Database means its own pool, the way a second worker would connect.
+    other = Database(pg_settings)
+    async with other.open():
+        other_repo = Repository(other, pg_settings)
+        async with repo.maintenance_lock():
+            assert await scheduled_cleanup_pass(other_repo) is None
+        # Expired rows left by other tests may exist, so check the thread, not an exact count.
+        removed = await scheduled_cleanup_pass(other_repo)
+        assert removed is not None and removed >= 1
+        assert await scheduled_cleanup_pass(other_repo) == 0
+    with pytest.raises(NotFound):
+        await repo.get_thread(owner, tid)
+
+
+def test_scheduled_cleanup_task_lifecycle(pg_settings, migrated):
+    app = create_app(pg_settings.model_copy(update={"cleanup_interval_minutes": 0}))
+    with signed_in_client(app) as client:
+        assert client.get("/readyz").status_code == 200
+        assert getattr(app.state, "cleanup_task", None) is None
+    app = create_app(pg_settings)
+    with signed_in_client(app) as client:
+        assert app.state.cleanup_task is not None

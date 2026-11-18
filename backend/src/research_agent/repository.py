@@ -37,6 +37,8 @@ RATE_LIMIT_RETENTION_WINDOWS = 2
 ACTIVE_RUN_FRESHNESS = timedelta(minutes=2)
 # Transaction-scoped advisory lock that serializes run admission against the concurrency caps.
 RUN_ADMISSION_LOCK = 0x52_41_44_4D
+# Session advisory lock so only one process runs retention cleanup at a time.
+MAINTENANCE_LOCK = 0x43_4C_45_41_4E
 BUDGET_RESERVATION_RETENTION_DAYS = 30
 BUDGET_CLEANUP_BATCH = 1000
 
@@ -242,6 +244,46 @@ class Repository:
                 except BaseException:
                     await connection.invalidate()
                     raise
+
+    @asynccontextmanager
+    async def maintenance_lock(self):
+        """Session advisory lock so only one process runs retention cleanup at a time.
+
+        Shares the rules of ``thread_lock``: a dedicated connection owns the lock for the
+        whole pass, connection close or process death releases it, and it requires
+        direct/session-mode connections rather than a transaction-mode DB proxy.
+        """
+        async with self.db.engine.connect() as connection:
+            locked = await connection.scalar(
+                text("SELECT pg_try_advisory_lock(:key)"), {"key": MAINTENANCE_LOCK}
+            )
+            # The query autobegins a transaction, so commit it; the lock is session-scoped
+            # and survives. Then hold an open transaction: an idle connection could be handed
+            # to the cleanup pass itself, and a PostgreSQL session advisory lock is re-entrant
+            # for the session that already holds it.
+            await connection.commit()
+            if not locked:
+                raise Conflict("Maintenance is already running")
+            root_transaction = await connection.begin()
+            try:
+                yield
+            finally:
+                try:
+                    await connection.execute(
+                        text("SELECT pg_advisory_unlock(:key)"), {"key": MAINTENANCE_LOCK}
+                    )
+                except BaseException:
+                    # Closing the connection releases the session lock; never pool a
+                    # connection that may still hold it.
+                    await connection.invalidate()
+                    raise
+                finally:
+                    try:
+                        await root_transaction.rollback()
+                        await connection.commit()
+                    except BaseException:
+                        await connection.invalidate()
+                        raise
 
     async def start_run(
         self,

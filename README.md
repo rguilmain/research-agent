@@ -51,7 +51,10 @@ uv run research-agent
 The credentials above are **only for the loopback-bound development container**.
 Migrations are explicit and repeatable; application startup never creates tables.
 `uv run research-agent-cleanup` removes up to 100 expired/deleted threads per invocation
-and reconciles up to 100 stale runs. It is not scheduled automatically.
+and reconciles up to 100 stale runs. The live application also runs one such pass every
+`CLEANUP_INTERVAL_MINUTES` (default 15), and a PostgreSQL advisory lock keeps those passes
+and the manual command from overlapping, so several workers or machines are safe. Set
+`CLEANUP_INTERVAL_MINUTES=0` to disable the schedule and clean up by hand.
 
 **Identity (development only):** the browser gets an anonymous session cookie from
 `GET /api/v1/me`; threads are owned by that session. Optional GitHub sign-in (set
@@ -104,7 +107,8 @@ without a price is never offered in live mode. Verify prices before enabling exp
 - Cancellable frontend, safe Markdown, no remote tracking images, responsive MUI UI.
 - Offline backend/frontend tests, linting, type checks, committed lockfiles, CI.
 - PostgreSQL migrations, owner-scoped thread CRUD, cross-process per-thread run exclusion,
-  durable usage/status records, checkpointed live multi-turn research, and retention cleanup.
+  durable usage/status records, checkpointed live multi-turn research, and retention cleanup
+  that runs in-process on a schedule and takes the same lock as the manual command.
 - Saved-history browsing: an owner-scoped transcript endpoint, a visible thread sidebar with
   rename/delete, reopening saved threads, live query-derived titles, and automatic cleanup of
   empty threads left by failed run admission.
@@ -122,8 +126,8 @@ without a price is never offered in live mode. Verify prices before enabling exp
 Hybrid access: anonymous users pass Turnstile and get a small daily quota; GitHub
 users get more quota and saved-history browsing. PostgreSQL already stores development
 threads and runs, development sessions/GitHub sign-in exist, and shared rate limits, daily
-quotas, Turnstile, the daily budget and concurrency caps are implemented. Scheduled cleanup
-and the remaining launch gates are **not implemented**.
+quotas, Turnstile, the daily budget, concurrency caps and scheduled cleanup are implemented.
+The remaining launch gates are **not implemented**.
 Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
 ## Checks

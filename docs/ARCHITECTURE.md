@@ -188,9 +188,12 @@ cleanup command. Soft-deleted threads are purged after the retention interval (a
 expiry may purge earlier). Threads with no runs at all are also purged after a short
 `EMPTY_THREAD_TTL_HOURS` grace period, which removes threads left behind by failed run
 admission. Cleanup skips active/locked threads, deletes checkpoint state first, then
-metadata/runs; a crash between these steps is safe to retry. Cleanup is not scheduled and
-must be run repeatedly for backlogs; `--max-batches` (1-50) drains more than 100 per
-invocation. Conversation/tool/checkpoint content
+metadata/runs; a crash between these steps is safe to retry. The live application runs one
+bounded pass every `CLEANUP_INTERVAL_MINUTES` (default 15, 0 disables) inside its own
+lifespan task, and a session advisory lock (`MAINTENANCE_LOCK`) lets only one process clean
+up at a time; the manual command takes the same lock, so the scheduler and
+`research-agent-cleanup` never overlap. One pass drains at most 100 rows per category, so a
+large backlog needs several intervals or `--max-batches` (1-50) by hand. Conversation/tool/checkpoint content
 is private retained data, not logs; encryption, formal retention policy, real identity and
 deployment backup/deletion guarantees remain launch work. PostgreSQL test databases must
 end in `_test`; tests truncate only that dedicated database. CI requires these tests.

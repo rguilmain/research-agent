@@ -1,7 +1,9 @@
-"""Explicit local/release schema setup and bounded retention cleanup commands."""
+"""Explicit local/release schema setup, retained-data cleanup and its in-process schedule."""
 
 import argparse
 import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from alembic import command
@@ -9,7 +11,9 @@ from alembic.config import Config
 
 from research_agent.config import Settings
 from research_agent.db import Database, configure_event_loop
-from research_agent.repository import Repository
+from research_agent.repository import Conflict, Repository
+
+logger = logging.getLogger(__name__)
 
 
 async def setup_checkpoints(settings: Settings):
@@ -39,6 +43,47 @@ def migrate() -> None:
     print("Application and checkpoint migrations complete")
 
 
+async def cleanup_batches(repo: Repository, max_batches: int) -> int:
+    """Remove expired data in bounded batches, stopping early once a pass finds nothing."""
+    total = 0
+    for _ in range(max_batches):
+        count = await repo.cleanup()
+        total += count
+        if count == 0:
+            break
+    # Sessions and OAuth states expire independently of threads; each pass is
+    # bounded so a large backlog cannot turn one invocation into a long scan.
+    for _ in range(max_batches):
+        removed = await repo.cleanup_identity()
+        total += removed
+        if removed == 0:
+            break
+    return total
+
+
+async def scheduled_cleanup_pass(repo: Repository) -> int | None:
+    """One locked cleanup pass; None when another process holds the maintenance lock."""
+    try:
+        async with repo.maintenance_lock():
+            return await cleanup_batches(repo, 1)
+    except Conflict:
+        return None
+
+
+async def periodic_cleanup(run_once: Callable[[], Awaitable[object]], interval_s: float) -> None:
+    """Run cleanup after every interval until cancelled.
+
+    A failing pass is logged by class name only, because exception messages can carry
+    key-bearing URLs, and the loop keeps running. Cancellation propagates for shutdown.
+    """
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            await run_once()
+        except Exception as exc:
+            logger.error("Scheduled cleanup failed class=%s", type(exc).__name__)
+
+
 async def cleanup_database(max_batches: int = 1):
     settings = Settings()
     if not settings.database_url.get_secret_value():
@@ -46,20 +91,8 @@ async def cleanup_database(max_batches: int = 1):
     db = Database(settings)
     async with db.open():
         repo = Repository(db, settings)
-        total = 0
-        for _ in range(max_batches):
-            count = await repo.cleanup()
-            total += count
-            if count == 0:
-                break
-        # Sessions and OAuth states expire independently of threads; each pass is
-        # bounded so a large backlog cannot turn one invocation into a long scan.
-        for _ in range(max_batches):
-            removed = await repo.cleanup_identity()
-            total += removed
-            if removed == 0:
-                break
-        return total
+        async with repo.maintenance_lock():
+            return await cleanup_batches(repo, max_batches)
 
 
 def cleanup() -> None:
@@ -69,6 +102,8 @@ def cleanup() -> None:
     configure_event_loop()
     try:
         count = asyncio.run(cleanup_database(args.max_batches))
+    except Conflict:
+        raise SystemExit("Cleanup is already running in another process") from None
     except Exception:
         raise SystemExit("Database cleanup failed") from None
     print(

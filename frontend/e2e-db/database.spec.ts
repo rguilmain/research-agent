@@ -12,8 +12,11 @@ import {
   DEMO_NOTICE,
   DEMO_THREAD_NOTICE,
   historyEntry,
+  HUMAN_CHECK,
   openVerified,
+  ORIGIN,
   QUOTA_EXCEEDED,
+  stubTurnstile,
 } from './support'
 
 const QUESTION = 'What is the capital of France?'
@@ -63,4 +66,26 @@ test('refuses a second question once the daily allowance is spent', async ({ pag
   await page.getByLabel('What would you like to research?').fill('And the capital of Italy?')
   await page.getByRole('button', { name: 'Research' }).click()
   await expect(page.getByText(QUOTA_EXCEEDED)).toBeVisible()
+})
+
+test('refuses an unverified anonymous research start server-side', async ({ page }) => {
+  // The widget renders but never reports success, so this session stays unverified.
+  await page.setExtraHTTPHeaders({ 'fly-client-ip': '198.51.100.14' })
+  await stubTurnstile(page, { verify: false })
+  await page.goto('/')
+  await expect(page.getByText(HUMAN_CHECK)).toBeVisible()
+
+  // With a question typed and a model selected, only the human check keeps the form disabled.
+  await page.getByLabel('What would you like to research?').fill('Unverified question')
+  await expect(page.getByRole('button', { name: 'Research' })).toBeDisabled()
+
+  // A tampered client cannot bypass it either: the server refuses the run outright.
+  const me = await page.request.get('/api/v1/me')
+  const { csrf_token: csrf } = await me.json()
+  const refused = await page.request.post('/api/v1/research', {
+    data: { query: 'Unverified question' },
+    headers: { origin: ORIGIN, 'x-csrf-token': csrf },
+  })
+  expect(refused.status()).toBe(403)
+  expect((await refused.json()).code).toBe('turnstile_required')
 })

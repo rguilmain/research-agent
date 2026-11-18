@@ -42,7 +42,21 @@ if (migrated.status !== 0) {
   process.exit(migrated.status ?? 1)
 }
 
-// 3. Serve in the foreground. Playwright waits for /healthz before running any test.
+// 3. Clear leftover sessions, threads, quotas and checkpoints so repeated local runs start from
+//    the same state. Without this the fixed test addresses would already have spent their daily
+//    allowance, and stale threads would collide with the history assertions.
+const reset = run(
+  'uv',
+  ['run', '--project', backend, 'python', resolve(import.meta.dirname, 'reset-database.py')],
+  frontend,
+)
+if (reset.status !== 0) {
+  console.error(reset.stdout ?? '')
+  console.error(reset.stderr ?? '')
+  process.exit(reset.status ?? 1)
+}
+
+// 4. Serve in the foreground. Playwright waits for /healthz before running any test.
 const server = spawn('uv', ['run', '--project', backend, 'research-agent'], {
   cwd: frontend,
   env: { ...process.env, DATABASE_URL: database },

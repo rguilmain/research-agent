@@ -11,7 +11,7 @@ from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
-from research_agent.catalog import load_tool_prices
+from research_agent.catalog import load_catalog, load_tool_prices
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 EPHEMERAL_SESSION_KEY = secrets.token_bytes(32)
 MIN_SESSION_SECRET_LENGTH = 32
 MAX_TURNSTILE_VERIFIED_MINUTES = 60
+# Hosts that only make sense for local development; production must name its real host.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _ephemeral_warned = False
 
 # Cloudflare's public always-pass/always-fail/already-spent keys, documented for local testing.
@@ -31,6 +33,16 @@ TURNSTILE_TEST_SECRETS = frozenset(
         "3x0000000000000000000000000000000AA",
     }
 )
+
+# Security work that is not implemented at all yet. Production must stay refused while this
+# list is non-empty, even when every configuration check below passes. The validator adds
+# _INCOMPLETE_SECURITY_GATES explicitly, so editing the public name does not unblock startup.
+INCOMPLETE_SECURITY_GATES = (
+    "deployment backup and restore have not been tested",
+    "the launch security acceptance tests have not been executed against a production-like "
+    "environment",
+)
+_INCOMPLETE_SECURITY_GATES = INCOMPLETE_SECURITY_GATES
 
 
 class Settings(BaseSettings):
@@ -155,7 +167,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_runtime(self) -> "Settings":
         if self.app_env == "production":
-            raise ValueError("Public deployment blocked until security launch gates pass")
+            # Production is refused until every configuration gate passes. The unimplemented
+            # security work is added as an explicit in-code guard (not read through the module
+            # global), so no attribute assignment can quietly re-enable production; removing
+            # the block requires a reviewed code change.
+            blockers = production_readiness_errors(self) + list(_INCOMPLETE_SECURITY_GATES)
+            if blockers:
+                raise ValueError(
+                    "Production startup is blocked until the security launch gates pass: "
+                    + "; ".join(blockers)
+                )
         if not self.demo_mode and not (
             self.openai_api_key.get_secret_value() and self.tavily_api_key.get_secret_value()
         ):
@@ -211,10 +232,10 @@ class Settings(BaseSettings):
 
 
 def production_readiness_errors(settings: Settings) -> list[str]:
-    """Identity/session prerequisites still missing before public launch.
+    """Configuration prerequisites still missing before public launch.
 
-    Reported as data rather than raised so operators see every gap at once. Production
-    startup stays unconditionally blocked until the remaining security gates land.
+    Reported as data rather than raised so operators see every gap at once. A non-empty
+    result (or any item in ``INCOMPLETE_SECURITY_GATES``) keeps production refused.
     """
     errors: list[str] = []
     if not settings.github_client_id:
@@ -223,8 +244,13 @@ def production_readiness_errors(settings: Settings) -> list[str]:
         errors.append("GITHUB_CLIENT_SECRET is not configured")
     if not settings.session_secret.get_secret_value():
         errors.append("SESSION_SECRET is not configured")
+    elif len(settings.session_secret.get_secret_value()) < MIN_SESSION_SECRET_LENGTH:
+        errors.append(f"SESSION_SECRET must be at least {MIN_SESSION_SECRET_LENGTH} characters")
     if not settings.secure_cookies:
         errors.append("PUBLIC_BASE_URL must use https for production cookies")
+    origin = urlsplit(settings.public_base_url)
+    if settings.secure_cookies and (origin.hostname in LOOPBACK_HOSTS or not origin.hostname):
+        errors.append("PUBLIC_BASE_URL must name the public host, not a loopback address")
     if not settings.turnstile_enabled:
         errors.append("TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are not configured")
     elif settings.turnstile_secret_key.get_secret_value() in TURNSTILE_TEST_SECRETS:
@@ -233,4 +259,22 @@ def production_readiness_errors(settings: Settings) -> list[str]:
         load_tool_prices()
     ):
         errors.append("WOLFRAM_ALPHA_APPID is configured without a price in models.toml")
+    # Production must never run the demo bypass or start without durable storage.
+    if settings.demo_mode:
+        errors.append("DEMO_MODE must be false in production")
+    if not settings.database_url.get_secret_value():
+        errors.append("DATABASE_URL is not configured")
+    if not (
+        settings.openai_api_key.get_secret_value() and settings.tavily_api_key.get_secret_value()
+    ):
+        errors.append("OPENAI_API_KEY and TAVILY_API_KEY are not configured")
+    enabled = {model_id: spec for model_id, spec in load_catalog().items() if spec.enabled}
+    if not enabled:
+        errors.append("No enabled model in models.toml")
+    elif settings.default_model not in enabled:
+        errors.append("DEFAULT_MODEL must name an enabled model")
+    # Anonymous callers may select only models marked anonymous, so at least one must be
+    # enabled; a model disabled on purpose must not, by itself, block launch.
+    elif not any(spec.anonymous for spec in enabled.values()):
+        errors.append("No anonymous-eligible model is enabled")
     return errors

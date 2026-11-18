@@ -18,7 +18,7 @@ from uuid import UUID
 from fastapi import Depends, Request, Response
 
 from research_agent import ratelimit
-from research_agent.config import Settings
+from research_agent.config import LOOPBACK_HOSTS, Settings
 from research_agent.repository import Identity, Repository, SessionRecord
 
 SESSION_COOKIE = "ra_session"
@@ -30,7 +30,6 @@ MAX_NEXT_PATH = 512
 # Same-origin relative path only: no scheme, authority, backslash or line breaks.
 NEXT_PATH = re.compile(r"^/(?!/)[^\\\r\n]*$")
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 NO_PRINCIPAL = UUID(int=0)
 
 

@@ -108,7 +108,7 @@ otherwise the rightmost `X-Forwarded-For` hop, the only entry a client cannot fo
 single trusted ingress. That assumption must be re-verified against the real Fly ingress in
 M9. A process without a database is not limited, which is development-only behavior. Known
 limits: fixed windows allow a brief boundary burst and address limits do not stop distributed
-abuse; scheduled cleanup remains.
+abuse; cleanup now runs on a schedule, but a large backlog still drains over several intervals.
 
 Daily quotas (M5b-1): `quota_usage` holds one weighted-unit counter per scope, HMAC key and
 UTC day. A conditional upsert (`... WHERE units + n <= limit RETURNING units`) adds units

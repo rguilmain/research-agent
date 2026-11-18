@@ -82,6 +82,12 @@
     response, immutable caching for hashed assets, `/docs` disabled while serving the UI, and
     container smoke checks for the served shell, CSP and bundle. See the M7a session notes.
     Remaining M7 work: production-only startup readiness checks and container image scanning.
+  - [x] M7b: production startup readiness is now a two-part gate. `production_readiness_errors`
+    reports every configuration gap (`DEMO_MODE`, `DATABASE_URL`, provider keys, OAuth, session
+    secret length, https non-loopback origin, real Turnstile keys, an enabled default model and
+    an enabled anonymous-eligible model), and the validator adds two unimplemented security
+    gates as an in-code constant so editing the public tuple cannot unblock startup. Container
+    image scanning was deliberately not added. See the M7b session notes.
 - [ ] M8: Postgres integration tests, Playwright offline full-stack tests,
   dependency/security checks, branch protection and approved deployment workflow.
   - [x] M8a: Playwright browser smoke test against the built UI and the real API in demo mode
@@ -102,13 +108,15 @@ with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bd
 `44206137733` on `327357c`; the three M7a commits landed together as `0445593` with run
 `44214853602`, and the preview-origin fix plus the M8a browser test landed as `765c13c` with
 run `44217995408` including the new e2e job). M3b includes in-process scheduled cleanup, M7a
-serves the built frontend same-origin with security headers, and M8a adds a Playwright browser
+serves the built frontend same-origin with security headers, M7b gates production startup on a
+readiness checklist plus two unimplemented security gates, and M8a adds a Playwright browser
 smoke test.
 
-1. Launch gates before any public deployment: the rest of M7 (production-only startup
-   readiness checks and container image scanning), the rest of M8 (dependency/security
-   checks, branch protection, approved deployment workflow), M9 production database and
-   Fly.io provisioning with approval, M10 go-live checklist.
+1. Launch gates before any public deployment: finish M8 (dependency/security checks, branch
+   protection, approved deployment workflow), then M9 (production database and Fly.io
+   provisioning, with approval) and M10 (go-live checklist). Production startup is gated on
+   the M7b readiness checklist plus deployment backup/restore testing and the launch
+   acceptance tests; container image scanning is not planned (owner decision).
 2. Optional next slice: M6 multi-turn UX polish (persisted theme, quota badge placement,
    accessibility and privacy/data-deletion screens). Resume of interrupted threads stays
    unimplemented.
@@ -116,6 +124,37 @@ smoke test.
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M7b production readiness session — November 17, 2026
+
+- Replaced the unconditional production refusal with a gated one. `production_readiness_errors`
+  now also checks `DEMO_MODE`, `DATABASE_URL`, both provider keys, `SESSION_SECRET` length,
+  a non-loopback `https` `PUBLIC_BASE_URL`, an enabled `DEFAULT_MODEL` and an enabled
+  anonymous-eligible model. It deliberately does not require every catalog model to be enabled,
+  because the documented rule is that one optional unavailable model must not block launch.
+- Two unimplemented gates (deployment backup/restore, launch acceptance tests) are added by the
+  validator from a private constant, so reassigning the exported tuple does not unlock
+  production; removing them requires a reviewed code change. Production is therefore still
+  refused today, and now it also reports exactly why.
+- Moved `LOOPBACK_HOSTS` into `config.py` and imported it in `auth.py`, because a readiness
+  check needs it and `auth` importing `config` would otherwise create a cycle.
+- Corrected stale public claims found during review: `SECURITY.md` no longer says production is
+  blocked on scheduled cleanup or that there is no rate limit, and `docs/ARCHITECTURE.md` no
+  longer says scheduled cleanup remains. `SECURITY.md` now documents the readiness checklist.
+- Tests (offline, no keys) cover each gap, the complete-configuration case, the two-part policy
+  including the reassignment attempt, and that no configured secret appears in the block
+  message. Two of them build settings with `model_construct` because the validator refuses
+  those invalid combinations before readiness can report them.
+- Observed locally: ruff check/format clean; pyright 0 errors; offline pytest 224 passed /
+  59 skipped; `REQUIRE_PG=1` pytest 283 passed. No frontend change, so frontend checks were not
+  re-run. Container image scanning was intentionally not added.
+- NOT verified: no production-like environment exists, so no production startup has ever
+  succeeded; backups, acceptance tests and deployment remain unimplemented. CI has not run on
+  this commit.
+- Limitations: readiness is a startup-time configuration gate, not a runtime health check; the
+  anonymous-eligible and default-model checks read the packaged catalog, so editing
+  `models.toml` changes them; the refusal message is deliberately terse and lists only gate
+  names.
 
 ### M8a browser smoke test session — November 17, 2026
 

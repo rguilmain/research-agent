@@ -159,8 +159,12 @@ saved history).
 - Observed locally: `npm run e2e:db` 3 passed (Edge), `npm run e2e` 5 passed, frontend lint,
   typecheck, 55 unit tests and build passed; backend ruff/format/pyright clean and the
   Turnstile/readiness/budget suites 57 passed.
-- NOT verified: CI has not run on this commit; the stub is not Cloudflare, so a real widget and
-  a real `siteverify` round trip remain unexercised; no live provider calls; no deployment.
+- CI: landed as commit `903bf47`; run `44229342687` observed successful for backend, frontend,
+  docker-smoke and e2e. The e2e job log shows the database-backed step ran and printed
+  `3 passed`, and the app reached "Application startup complete" against the CI Postgres
+  service, so the migrations and launcher work there too.
+- NOT verified: the stub is not Cloudflare, so a real widget and a real `siteverify` round trip
+  remain unexercised; no live provider calls; no deployment.
 - Limitations: demo threads have no checkpointed transcript, so reopening proves metadata and
   ownership rather than answer rendering; the database-backed suite needs a reachable
   PostgreSQL server; Firefox and WebKit remain out of scope.

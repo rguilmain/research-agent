@@ -34,6 +34,12 @@ TURNSTILE_TEST_SECRETS = frozenset(
     }
 )
 
+# The only endpoint production may use for human verification. Development and test runs may
+# point TURNSTILE_VERIFY_URL elsewhere so the browser test suite can stub Cloudflare without a
+# network call; production readiness refuses any other value, because a substituted endpoint
+# would let every caller through unverified.
+TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
 # Security work that is not implemented at all yet. Reported in the production refusal message
 # and kept here so tests and documentation share one list. The refusal itself is written inline
 # in the validator below, so changing this value cannot silently enable production: removing
@@ -88,6 +94,7 @@ class Settings(BaseSettings):
     quota_user_daily: int = 25
     turnstile_site_key: str = ""
     turnstile_secret_key: SecretStr = SecretStr("")
+    turnstile_verify_url: str = TURNSTILE_SITEVERIFY_URL
     turnstile_verified_minutes: int = 60
     rate_limit_turnstile_per_hour: int = 30
     global_daily_budget_usd: Decimal = Decimal("5")
@@ -217,6 +224,9 @@ class Settings(BaseSettings):
         secret = bool(self.turnstile_secret_key.get_secret_value())
         if site != secret:
             raise ValueError("TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY must be set together")
+        verify = urlsplit(self.turnstile_verify_url)
+        if verify.scheme not in {"http", "https"} or not verify.netloc:
+            raise ValueError("TURNSTILE_VERIFY_URL must be an absolute http(s) URL")
         if not 1 <= self.turnstile_verified_minutes <= MAX_TURNSTILE_VERIFIED_MINUTES:
             raise ValueError(
                 f"TURNSTILE_VERIFIED_MINUTES must be between 1 and {MAX_TURNSTILE_VERIFIED_MINUTES}"
@@ -260,6 +270,8 @@ def production_readiness_errors(settings: Settings) -> list[str]:
         errors.append("TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are not configured")
     elif settings.turnstile_secret_key.get_secret_value() in TURNSTILE_TEST_SECRETS:
         errors.append("TURNSTILE_SECRET_KEY is a Cloudflare test key")
+    if settings.turnstile_verify_url != TURNSTILE_SITEVERIFY_URL:
+        errors.append("TURNSTILE_VERIFY_URL must be the Cloudflare siteverify endpoint")
     if settings.wolfram_alpha_appid.get_secret_value() and "wolfram_alpha" not in (
         load_tool_prices()
     ):

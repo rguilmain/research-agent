@@ -17,4 +17,6 @@ export default tseslint.config(
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },
+  // The browser-test harness uses plain Node scripts for the stub and the launcher.
+  { files: ['**/*.mjs'], languageOptions: { globals: { ...globals.node } } },
 )

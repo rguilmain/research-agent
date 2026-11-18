@@ -180,3 +180,36 @@ def test_readiness_reports_missing_and_test_keys():
     assert "TURNSTILE_SECRET_KEY is a Cloudflare test key" not in (
         production_readiness_errors(settings(turnstile_secret_key=SecretStr(REAL_SECRET)))
     )
+
+
+def test_default_verify_endpoint_is_cloudflare():
+    assert settings().turnstile_verify_url == turnstile.SITEVERIFY_URL
+    assert turnstile.SITEVERIFY_URL.startswith("https://challenges.cloudflare.com/")
+
+
+async def test_overridden_endpoint_is_actually_used(client):
+    # Development/test may point at a local stub so the browser suite never calls Cloudflare.
+    stub = "http://127.0.0.1:8124/turnstile/v0/siteverify"
+    config = settings(turnstile_verify_url=stub)
+    with respx.mock:
+        route = respx.post(stub).mock(
+            return_value=httpx.Response(200, json={"success": True, "hostname": "example.com"})
+        )
+        assert await turnstile.verify(client, config, DUMMY_TOKEN, None) is True
+    assert route.called
+
+
+def test_readiness_refuses_a_substituted_verify_endpoint():
+    # A swapped endpoint would mark every caller as verified, so production must refuse it.
+    assert "TURNSTILE_VERIFY_URL must be the Cloudflare siteverify endpoint" in (
+        production_readiness_errors(settings(turnstile_verify_url="http://127.0.0.1:8124/x"))
+    )
+    assert "TURNSTILE_VERIFY_URL must be the Cloudflare siteverify endpoint" not in (
+        production_readiness_errors(settings())
+    )
+
+
+@pytest.mark.parametrize("url", ["not-a-url", "challenges.cloudflare.com", "/relative"])
+def test_verify_endpoint_must_be_absolute(url):
+    with pytest.raises(ValidationError, match="TURNSTILE_VERIFY_URL must be an absolute"):
+        Settings(app_env="test", turnstile_verify_url=url)

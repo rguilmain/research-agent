@@ -97,8 +97,12 @@
     `backend` job audits the locked runtime and dev dependency sets with pinned `pip-audit`
     (any advisory fails the build). `main` is protected by the `backend`, `frontend`,
     `docker-smoke` and `e2e` checks, with force-pushes and deletions blocked and admin
-    enforcement on. See the M8b session notes. Remaining M8 work: the approved deployment
-    workflow (M9/M10).
+    enforcement on. See the M8b session notes.
+  - [x] M8c: a second Playwright config (`npm run e2e:db`) runs the built UI against a
+    PostgreSQL-backed server, covering the anonymous session, real server-side Turnstile
+    verification (Cloudflare replaced by a local stub), the daily quota refusal and the
+    saved-history sidebar. The CI `e2e` job gained a Postgres service and this step. See the
+    M8c session notes. Remaining M8 work: the approved deployment workflow (M9/M10).
 - [ ] M9: Fly.io app + Managed Postgres, release migrations/checkpointer setup,
   secrets, health checks, HTTPS, backups/restore test, staging security smoke test.
 - [ ] M10: launch documentation/screenshot, threat model, privacy/retention policy,
@@ -115,7 +119,8 @@ with CI observed successful (`44191867526` on `7c936dc`, `44199641545` on `959bd
 run `44217995408` including the new e2e job). M3b includes in-process scheduled cleanup, M7a
 serves the built frontend same-origin with security headers, M7b gates production startup on a
 readiness checklist plus two unimplemented security gates, and M8a adds a Playwright browser
-smoke test.
+smoke test. M8c extends the browser suite to a database-backed server (Turnstile, quota,
+saved history).
 
 1. Launch gates before any public deployment: the remaining M8 item is the approved deployment
    workflow, then M9 (production database and Fly.io provisioning, with approval) and M10
@@ -129,6 +134,36 @@ smoke test.
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 4. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M8c database-backed browser tests session — November 17, 2026
+
+- Added a second Playwright config (`frontend/playwright.db.config.ts`, `npm run e2e:db`,
+  specs in `frontend/e2e-db/`) that serves the built UI from a real PostgreSQL-backed process.
+  `e2e-db/start-backend.mjs` creates the dedicated `research_agent_e2e` database, applies
+  migrations, then serves the app; `e2e-db/siteverify-stub.mjs` stands in for Cloudflare.
+- Three browser tests cover what the demo-only suite cannot: the anonymous session plus
+  server-side Turnstile verification unlocking the form and answering a question; the saved
+  thread appearing in the sidebar with its query-derived title, being renamed through the
+  real dialog, and being reopened; and the second question of the day refused by the daily
+  quota with the specific `quota_exceeded` copy.
+- Test isolation: each test sends its own `fly-client-ip` with `TRUST_PROXY_HEADERS=true`, so
+  the per-address quota and rate-limit buckets do not leak between tests. The trusted proxy
+  header is acceptable only because this is a loopback-only test process.
+- Production safety: `TURNSTILE_VERIFY_URL` is the one production-code change, and production
+  readiness refuses any value other than Cloudflare's endpoint, because a substituted endpoint
+  would mark every caller verified. Backend tests assert the default, that an override is
+  really used, that readiness refuses a substitution, and that the URL must be absolute.
+- Note: the reopen assertion deliberately checks the stored metadata path (a demo thread has no
+  checkpoint, so `items` is empty and `can_continue` is false). Transcript rendering is covered
+  by the backend history tests, not here.
+- Observed locally: `npm run e2e:db` 3 passed (Edge), `npm run e2e` 5 passed, frontend lint,
+  typecheck, 55 unit tests and build passed; backend ruff/format/pyright clean and the
+  Turnstile/readiness/budget suites 57 passed.
+- NOT verified: CI has not run on this commit; the stub is not Cloudflare, so a real widget and
+  a real `siteverify` round trip remain unexercised; no live provider calls; no deployment.
+- Limitations: demo threads have no checkpointed transcript, so reopening proves metadata and
+  ownership rather than answer rendering; the database-backed suite needs a reachable
+  PostgreSQL server; Firefox and WebKit remain out of scope.
 
 ### M8b security tooling session — November 17, 2026
 

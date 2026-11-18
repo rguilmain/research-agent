@@ -11,9 +11,9 @@ from uuid import uuid4
 import httpx
 
 from research_agent import ratelimit
-from research_agent.config import TURNSTILE_TEST_SECRETS, Settings
+from research_agent.config import TURNSTILE_SITEVERIFY_URL, TURNSTILE_TEST_SECRETS, Settings
 
-SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+SITEVERIFY_URL = TURNSTILE_SITEVERIFY_URL
 MAX_TOKEN_CHARS = 2048
 MAX_RESPONSE_BYTES = 8_000
 TIMEOUT_S = 10
@@ -59,7 +59,11 @@ async def _siteverify(
     for attempt in range(ATTEMPTS):
         try:
             async with client.stream(
-                "POST", SITEVERIFY_URL, data=data, timeout=TIMEOUT_S, follow_redirects=False
+                "POST",
+                settings.turnstile_verify_url,
+                data=data,
+                timeout=TIMEOUT_S,
+                follow_redirects=False,
             ) as response:
                 body = bytearray()
                 async for chunk in response.aiter_bytes(chunk_size=4096):

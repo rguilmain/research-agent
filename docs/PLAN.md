@@ -126,7 +126,8 @@ Historical dependency triage is recorded below. Current next slices:
   tests); `scripts/smoke-docker.ps1` passed (image safety, packaged migrations, HTTP health,
   demo SSE; the demo container has no database, so no cleanup task starts there).
 - CI: landed as commit `b23624a`; run `44210570001` observed successful (backend with
-  REQUIRE_PG=1, frontend, docker-smoke).
+  REQUIRE_PG=1, frontend, docker-smoke). The follow-up notes commit `3fe059c` also passed CI
+  as run `44210827935`.
 - NOT verified: a multi-worker or multi-machine deployment (the advisory lock is designed for
   it, but only a single process has been exercised outside the CI fixture) and any live
   provider call. No frontend or dependency changes, so frontend checks and `uv sync --locked`

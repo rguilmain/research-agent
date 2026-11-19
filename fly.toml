@@ -8,7 +8,10 @@
 # a reviewed change in backend/src/research_agent/config.py, not a configuration edit.
 
 app = 'research-agent-rosy-dawn-8813'
-primary_region = 'ewr'
+# iad (Ashburn) is the app's primary region because Managed Postgres is not available in ewr;
+# the database must sit in the same region as the app. MPG regions: iad, ord, dfw, lax, sjc,
+# yyz, ams, fra, lhr, sin, syd, nrt, gru.
+primary_region = 'iad'
 
 [build]
 

@@ -116,8 +116,9 @@
     session notes.
 - [ ] M9: Fly.io app + Managed Postgres, release migrations/checkpointer setup,
   secrets, health checks, HTTPS, backups/restore test, staging security smoke test.
-  BLOCKED on paid-infrastructure approval: the app exists, but no database, secrets,
-  deploy or backup test has been performed.
+  Partly done: the app was recreated clean in `iad` and the GitHub `production` environment now
+  requires a reviewer. The Managed Postgres cluster is deferred by owner decision, so no Fly
+  secret, no `FLY_API_TOKEN` and no deploy exist yet. See the M9 provisioning session notes.
 - [ ] M10: launch documentation/screenshot, threat model, privacy/retention policy,
   runbook and release. Remove production block ONLY after security acceptance tests pass.
 - [ ] M11: update rag-app README to point to the completed replacement.
@@ -142,9 +143,11 @@ makes the deploy pipeline manual and fail-closed.
    paid-infrastructure sign-off. Production startup is gated on the M7b readiness checklist plus
    deployment backup/restore testing and the launch acceptance tests; container image scanning
    is not planned (owner decision).
-2. M9 starts by creating the Fly Managed Postgres cluster and setting the app's secrets, then
-   runs the first `workflow_dispatch` deploy against the readiness refusal to prove it fails
-   closed, and only then begins backup/restore testing. Do not provision without approval.
+2. M9 has started: the app was recreated clean in `iad` (Managed Postgres is unavailable in the
+   old `ewr` region) and the GitHub `production` environment now requires a reviewer. Next is to
+   create the Managed Postgres cluster in `iad`, attach it, and set the remaining secrets, then
+   run the first approval-gated `workflow_dispatch` deploy. The owner deferred the paid database,
+   so do not provision it without approval.
 3. M6 UX polish is landed (M6b). Nothing else in the milestone list is unblocked without
    owner approval: M9/M10 need paid-infrastructure sign-off and M11 waits for the replacement
    to be complete. Resume of interrupted threads stays unimplemented.
@@ -152,6 +155,38 @@ makes the deploy pipeline manual and fail-closed.
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
 5. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M9 provisioning session (part 1) — November 19, 2026
+
+- Closed the demo exposure found in the previous session and rebuilt the app clean. The original
+  app object was destroyed with `fly apps destroy`, then recreated with `fly apps create` so no
+  leftover configuration from the unsafe `fly launch` deploy remains. The app has no Machines
+  and no secrets, so it cannot serve anything.
+- **Region changed from `ewr` to `iad`.** `fly platform regions` marks Managed Postgres support
+  per region and `ewr` has none; the nearest supported US East region is `iad` (Ashburn).
+  `fly.toml` `primary_region` now names `iad`, because the database must sit with the app.
+- Verified the exact Managed Postgres interface from Fly's current docs and the installed CLI
+  (`fly.exe v0.5.14`): `fly mpg create` takes `--name`, `--region`, `--plan`
+  (Basic/Starter/Launch/Scale/Performance), `--pg-major-version` (16 default, or 17) and
+  `--volume-size`; `fly mpg attach <cluster-id> --app <app>` adds a `DATABASE_URL` secret by
+  default (`--variable-name` overrides). Prices: Basic $38, Starter $72, Launch $282,
+  Scale $962, Performance $1,922 per month, plus $0.28/GB-month storage.
+- Confirmed the app is compatible with MPG's bundled connection pooling without code changes:
+  `db.py` sets `prepare_threshold=0` (no server-side prepared statements), the run-admission
+  lock is transaction-scoped, and the maintenance lock is held on one pooled connection for the
+  duration of the pass. This supersedes the earlier runbook warning that the pooler might break
+  the advisory locks.
+- GitHub `production` environment created via the API with `rguilmain` as a required reviewer,
+  so the deploy job now needs an approval. The `FLY_API_TOKEN` environment secret is deliberately
+  not set yet, so no deploy can run.
+- Owner decision: **defer creating the Managed Postgres cluster** and set up everything else
+  first. Nothing paid was provisioned in this session.
+- Observed locally: the deployment guard tests still pass (6 passed), ruff check clean and
+  pyright 0 errors. No dependency change.
+- NOT verified: no deploy, no database, no secrets, no backup or restore test, no acceptance
+  test. Fly Proxy autostop behaviour for an open SSE stream is still untested.
+- Next: when the database is approved, run Phase 2 of `docs/DEPLOY.md` (create the cluster in
+  `iad`, attach it, then set the remaining secrets) and then the approval-gated first deploy.
 
 ### M8d Fly deployment pipeline session — November 19, 2026
 

@@ -8,26 +8,46 @@ and the Machines) and the launch gates have been signed off.
 
 ## Current state — read this first
 
-- App `research-agent-rosy-dawn-8813` exists in region `ewr`, hostname
-  `research-agent-rosy-dawn-8813.fly.dev`. It was created with `fly launch`.
-- It was deployed once from the original, unsafe `fly.toml` (commit `49e60db`), which set no
-  `APP_ENV`. The running image therefore used the settings default (`APP_ENV=development`,
-  `DEMO_MODE=true`). A probe of `/api/v1/config` returned
+- App `research-agent-rosy-dawn-8813`, org `personal`, region **`iad`** (Ashburn), hostname
+  `research-agent-rosy-dawn-8813.fly.dev`. It has no Machines and no secrets.
+- The original app was created by `fly launch` and deployed from the unsafe `fly.toml`
+  (commit `49e60db`), which set no `APP_ENV`. The running image therefore used the settings
+  default (`APP_ENV=development`, `DEMO_MODE=true`). A probe of `/api/v1/config` returned
   `{"demo":true,"login_enabled":false,"version":"0.1.0","turnstile_site_key":null}`, and
   `fly secrets list` was empty: a public, unauthenticated demo endpoint with no database, no
   Turnstile and no provider keys.
-- That exposure was closed on 2026-11-19 with `fly scale count 0`, which destroyed both
-  Machines. The app now reports `Image -` and the hostname does not serve. The **app object and
-  its configuration still exist**; only the Machines were removed.
-- `fly.toml` and the deploy workflow have since been corrected on the branch
-  `feat/fly-deploy-gating` (PR #21): `APP_ENV=production`, a `/healthz` liveness check, a
-  `research-agent-migrate` release command, a manual approval-gated workflow and offline guard
-  tests. None of that is deployed.
-- No Fly secret, no database and no GitHub `production` environment exist yet.
+- That exposure was closed on 2026-11-19 with `fly scale count 0`, and the app was then
+  destroyed and recreated clean in `iad`, so no leftover configuration from the bad deploy
+  remains.
+- `fly.toml` and the deploy workflow were corrected on the branch `feat/fly-deploy-gating`
+  (PR #21): `APP_ENV=production`, a `/healthz` liveness check, a `research-agent-migrate`
+  release command, a manual approval-gated workflow and offline guard tests.
+- **Managed Postgres is not available in `ewr`.** The app moved to `iad` because the database
+  must sit in the app's region. MPG regions are iad, ord, dfw, lax, sjc, yyz, ams, fra, lhr,
+  sin, syd, nrt and gru.
 
 Two lessons to carry forward: `fly launch` deploys the current `fly.toml` immediately, so review
 it before the first launch; and scale-to-zero means an exposed app is one request away from
 waking, not merely "stopped".
+
+### Provisioning progress
+
+| Step | State |
+| --- | --- |
+| Destroy the unsafe app | Done (2026-11-19) |
+| Recreate the app clean in `iad` | Done |
+| `fly.toml` region and fail-closed settings | Done (PR #21) |
+| GitHub `production` environment | Done |
+| Required reviewer on the environment | Done (`rguilmain`) |
+| Managed Postgres cluster | **Not created — owner deferred** |
+| Fly app secrets | Not set |
+| `FLY_API_TOKEN` environment secret | Not set |
+| First deploy | Not run |
+| Backup/restore test, acceptance tests | Not run |
+
+The deploy workflow is safe to leave in place: it is `workflow_dispatch` only and its job would
+fail closed while `APP_ENV=production` is unstartable, so nothing can deploy by accident.
+
 
 ## Rules
 
@@ -64,15 +84,16 @@ the rate limits key on the client address. This has not been verified against a 
 
 ## Phase 1 — GitHub environment and approval gate (no Fly cost)
 
+Done on 2026-11-19. The `production` environment exists with `rguilmain` as a required reviewer:
+
 ```powershell
-Set-Location C:\Users\richg\dev\research-agent
 gh api --method PUT 'repos/rguilmain/research-agent/environments/production'
 gh api --method PUT 'repos/rguilmain/research-agent/environments/production' `
-  -f 'reviewers[][type]=User' -F 'reviewers[][id]=<your-github-user-id>'
+  -f 'reviewers[][type]=User' -F 'reviewers[][id]=3230432'
 ```
 
-Then store the deploy token **on the environment**, not the repository, so it is released only
-to the approved job:
+Remaining: store the deploy token **on the environment**, not the repository, so it is released
+only to the approved job. Do this when the first deploy is imminent:
 
 ```powershell
 fly tokens create deploy --app research-agent-rosy-dawn-8813
@@ -84,24 +105,42 @@ The `reviewers` field requires the reviewer to be a repository collaborator or o
 Confirm the API response lists the reviewer before relying on the gate.
 
 
-## Phase 2 — Managed Postgres (paid; needs approval)
+## Phase 2 — Managed Postgres (paid; deferred by owner)
 
-Confirm the current syntax with `fly mpg create --help` first; this interface is newer and moves
-quickly. The shape is:
+Not created yet. When approved, confirm the current syntax with `fly mpg create --help` first.
+The shape is:
 
 ```powershell
-fly mpg create --name research-agent-db --region ewr --plan <plan>
+fly mpg create --name research-agent-db --region iad --plan <plan> --pg-major-version 17
 fly mpg attach <cluster-id> --app research-agent-rosy-dawn-8813
 ```
 
-`fly mpg attach` sets `DATABASE_URL` as an app secret. If it does not, copy the connection string
-from `fly mpg status <cluster-id>` and set it by hand. Managed Postgres is a separate product
-from the older unmanaged `fly postgres`; do not mix them.
+`fly mpg attach` adds a secret named `DATABASE_URL` by default (override with
+`--variable-name`). If it does not, copy the connection string from
+`fly mpg status <cluster-id>`. Managed Postgres is a separate product from the older unmanaged
+`fly postgres`; do not mix them.
 
-Check two things before going further:
+Plan options and prices (Fly's pricing page, November 2026):
 
-- The per-thread locking in `repository.py` needs direct/session-mode connections. Confirm the
-  attached URL does not point at a transaction-mode pooler, or the advisory locks will not work.
+| Plan | Size | Per month |
+| --- | --- | --- |
+| Basic | shared-2x, 1 GB | $38 |
+| Starter | shared-2x, 2 GB | $72 |
+| Launch | performance-2x, 8 GB | $282 |
+| Scale | performance-4x, 32 GB | $962 |
+| Performance | performance-8x, 64 GB | $1,922 |
+
+Storage is billed at $0.28 per GB per month. `--pg-major-version` accepts 16 (the default) or 17,
+and a cluster cannot be upgraded in place, so choose deliberately.
+
+The application is already compatible with MPG's bundled connection pooling: `db.py` sets
+`prepare_threshold=0` (no server-side prepared statements), the run-admission lock is
+transaction-scoped, and the maintenance lock is held on a single pooled connection for the
+duration of the pass. Confirm after attaching by checking that `/readyz` reports ok and that a
+live run acquires its lock.
+
+Also check:
+
 - Backups: confirm the cluster's backup schedule and retention, and keep the restore
   instructions with this runbook.
 

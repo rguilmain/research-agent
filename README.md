@@ -151,6 +151,9 @@ Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
 `fly.toml` and `.github/workflows/fly-deploy.yml` describe the production app, but nothing is
 deployed and deployment stays blocked until the launch gates in [SECURITY.md](SECURITY.md) pass.
+The Fly app exists but is empty (no Machines, no secrets); the Managed Postgres database has not
+been created. See [docs/DEPLOY.md](docs/DEPLOY.md) for the provisioning runbook and its progress
+table. The app runs in `iad` because Managed Postgres is not available in `ewr`.
 The app is configured to scale to zero: Fly Proxy stops the only Machine when there is no
 traffic and starts it on the next request, so the first visit after an idle period waits for a
 cold start, and the in-process cleanup schedule runs only while a Machine is awake.

@@ -50,6 +50,12 @@ and transactional budget reservations. GitHub OAuth terminates in the backend;
 the browser receives only an opaque session cookie, never provider tokens.
 Cloudflare Turnstile protects anonymous admission, not authorization.
 
+Deployment runs through a manual, approval-gated workflow, and the app starts with
+`APP_ENV=production` so the readiness refusal, not a demo bypass, is the first thing a
+deploy meets. Fly is configured to scale to zero, so the in-process cleanup schedule runs
+only while a Machine is awake; a reliable cleanup schedule needs a separate trigger before
+launch.
+
 ## Decisions
 
 1. Python 3.12 and uv; all tool invocations use backend's own environment.

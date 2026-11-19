@@ -108,9 +108,16 @@
     PostgreSQL-backed server, covering the anonymous session, real server-side Turnstile
     verification (Cloudflare replaced by a local stub), the daily quota refusal and the
     saved-history sidebar. The CI `e2e` job gained a Postgres service and this step. See the
-    M8c session notes. Remaining M8 work: the approved deployment workflow (M9/M10).
+    M8c session notes.
+  - [x] M8d: the Fly deploy pipeline is now fail-closed and approval-gated. `fly.toml` sets
+    `APP_ENV=production`, a `/healthz` liveness check and a `research-agent-migrate` release
+    command; the workflow is `workflow_dispatch` only, runs in the GitHub `production`
+    environment and pins its actions to commit SHAs. Guarded by offline tests. See the M8d
+    session notes.
 - [ ] M9: Fly.io app + Managed Postgres, release migrations/checkpointer setup,
   secrets, health checks, HTTPS, backups/restore test, staging security smoke test.
+  BLOCKED on paid-infrastructure approval: the app exists, but no database, secrets,
+  deploy or backup test has been performed.
 - [ ] M10: launch documentation/screenshot, threat model, privacy/retention policy,
   runbook and release. Remove production block ONLY after security acceptance tests pass.
 - [ ] M11: update rag-app README to point to the completed replacement.
@@ -127,20 +134,60 @@ serves the built frontend same-origin with security headers, M7b gates productio
 readiness checklist plus two unimplemented security gates, and M8a adds a Playwright browser
 smoke test. M8c extends the browser suite to a database-backed server (Turnstile, quota,
 saved history). M6b finishes the M6 UX polish (persisted theme, accessibility, privacy
-dialog, bulk history deletion) in pull request #20.
+dialog, bulk history deletion) in pull request #20. M8d lands the Fly deployment config and
+makes the deploy pipeline manual and fail-closed.
 
-1. Launch gates before any public deployment: the remaining M8 item is the approved deployment
-   workflow, then M9 (production database and Fly.io provisioning, with approval) and M10
-   (go-live checklist). Production startup is gated on the M7b readiness checklist plus
+1. Launch gates before any public deployment: the approved deployment workflow is landed (M8d).
+   M9 (production database and Fly.io provisioning) and M10 (go-live checklist) still need
+   paid-infrastructure sign-off. Production startup is gated on the M7b readiness checklist plus
    deployment backup/restore testing and the launch acceptance tests; container image scanning
    is not planned (owner decision).
-2. M6 UX polish is landed (M6b). Nothing else in the milestone list is unblocked without
+2. M9 starts by creating the Fly Managed Postgres cluster and setting the app's secrets, then
+   runs the first `workflow_dispatch` deploy against the readiness refusal to prove it fails
+   closed, and only then begins backup/restore testing. Do not provision without approval.
+3. M6 UX polish is landed (M6b). Nothing else in the milestone list is unblocked without
    owner approval: M9/M10 need paid-infrastructure sign-off and M11 waits for the replacement
    to be complete. Resume of interrupted threads stays unimplemented.
-3. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
+4. Remaining open Dependabot PR is #11 (jsdom 31), which requires Node >= 22.22.2 versus
    the documented Node 22.14 baseline. Do not merge until the Node baseline is raised
    deliberately; never bypass engines.
-4. Keep README truthful; a demo foundation is not a production-ready application.
+5. Keep README truthful; a demo foundation is not a production-ready application.
+
+### M8d Fly deployment pipeline session — November 19, 2026
+
+- Reviewed the generated `fly.toml` and `fly-deploy.yml` from commit `49e60db` before pushing.
+  Both were unsafe for this project as written: the workflow deployed on every push to
+  `main`/`master` with no approval and without waiting for CI, and `fly.toml` set no `APP_ENV`,
+  so the settings default (`development`, `DEMO_MODE=true`) would have served a public,
+  unauthenticated demo. The commit message claimed a readiness gate that did not exist.
+- `fly.toml`: added `[env] APP_ENV='production'` so a deploy starts the M7b refusal and fails
+  closed instead of exposing demo mode; added a `[[http_service.checks]]` liveness check on
+  `/healthz` (not `/readyz`, which touches PostgreSQL and would fail while a Machine starts);
+  added `[deploy] release_command='research-agent-migrate'`, which needs `DATABASE_URL` as a
+  Fly secret. Kept scale to zero (`min_machines_running = 0`, `auto_stop_machines = 'stop'`,
+  `auto_start_machines = true`) per owner decision.
+- `.github/workflows/fly-deploy.yml`: trigger reduced to `workflow_dispatch` only, so a merge
+  never deploys; the job runs in the GitHub `production` environment for the approval gate and
+  the environment-scoped `FLY_API_TOKEN`; added a non-cancelling `fly-deploy` concurrency group
+  and `permissions: contents: read`; pinned `actions/checkout` and
+  `superfly/flyctl-actions/setup-flyctl` to commit SHAs with the tag in a comment.
+- New offline test `backend/tests/test_deployment_config.py` parses both files with `tomllib`
+  and `pyyaml` and asserts: `APP_ENV=production`, scale-to-zero settings, exactly one liveness
+  check on `/healthz`, the migrate release command, a `workflow_dispatch`-only trigger, the
+  `production` environment, SHA-pinned actions, and that the deploy token is never printed.
+  It caught a real mistake during development: the first revision put the tag in `uses:` and the
+  SHA in a comment, which pins nothing, because GitHub only honors the SHA in `uses:` itself.
+- Observed locally: `fly config validate` reports "Configuration is valid"; ruff check/format
+  clean; pyright 0 errors; the new test file 6 passed. No dependency change, so no locked sync.
+  The full backend suite, frontend checks, Docker smoke and e2e are exercised by CI on the pull
+  request.
+- NOT verified: no deploy was attempted, no Fly secret or database was created, no backup or
+  restore test was run, and the GitHub `production` environment, its required reviewers and the
+  `FLY_API_TOKEN` secret do not exist yet. Fly Proxy autostop behaviour for an open SSE stream
+  is untested, so whether a long run can be interrupted by an idle stop is unknown.
+- Limitations: the readiness refusal is a startup gate, so the first successful deploy also
+  requires every production secret; with scale to zero the in-process cleanup schedule runs only
+  while a Machine is awake, so timely cleanup needs a separate scheduler before launch.
 
 ### M6b multi-turn UX polish session — November 17, 2026
 

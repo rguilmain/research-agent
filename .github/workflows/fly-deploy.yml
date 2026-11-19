@@ -1,0 +1,32 @@
+# See https://docs.fly.io/launch/continuous-deployment-with-github-actions
+#
+# Deployment is deliberately manual. `main` is protected and this job is the only path to
+# Fly, so a merge never deploys on its own. The job runs in the `production` GitHub
+# environment; require reviewers on that environment so a deploy needs an explicit approval.
+# Set the FLY_API_TOKEN secret on the environment (not the repository) so it is released
+# only to this job, and do not deploy until the M9 launch gates have been signed off.
+
+name: Fly Deploy
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy app
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      # Pinned to a commit SHA: a moved tag must not be able to change what runs with the
+      # deploy token in scope. Update the SHA and the comment together.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: superfly/flyctl-actions/setup-flyctl@dfdfedc86b296f5e5384f755a18bf400409a15d0 # v1.4
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -185,9 +185,22 @@ makes the deploy pipeline manual and fail-closed.
   restore test was run, and the GitHub `production` environment, its required reviewers and the
   `FLY_API_TOKEN` secret do not exist yet. Fly Proxy autostop behaviour for an open SSE stream
   is untested, so whether a long run can be interrupted by an idle stop is unknown.
+- **Incident found while writing the M9 runbook:** the app `research-agent-rosy-dawn-8813` had
+  already been deployed by `fly launch` from the original unsafe `fly.toml`. Its two Machines
+  were stopped but reachable through Fly Proxy's autostart, and a probe of
+  `https://research-agent-rosy-dawn-8813.fly.dev/api/v1/config` returned `demo:true` with no
+  Turnstile key and `fly secrets list` empty — a public, unauthenticated demo endpoint, which
+  AGENTS.md forbids. Closed on 2026-11-19 with `fly scale count 0` (both Machines destroyed; the
+  app now reports `Image -`). No secret, database or real key was ever configured, so there was
+  no credential exposure and no user data. The app object still exists and must be recreated
+  cleanly or deployed only through the corrected pipeline. A follow-up should confirm the region
+  and app name are still the intended ones before M9 provisioning.
 - Limitations: the readiness refusal is a startup gate, so the first successful deploy also
   requires every production secret; with scale to zero the in-process cleanup schedule runs only
   while a Machine is awake, so timely cleanup needs a separate scheduler before launch.
+- The M9 provisioning runbook is `docs/DEPLOY.md` (current state, secret list, GitHub
+  environment and approval gate, Managed Postgres, secrets, first deploy, verification,
+  post-launch gates and rollback). It is written for review; no step has been executed.
 
 ### M6b multi-turn UX polish session — November 17, 2026
 

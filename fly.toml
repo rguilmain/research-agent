@@ -1,0 +1,49 @@
+# fly.toml app configuration file generated for research-agent-rosy-dawn-8813 on 2026-11-19T15:26:21-05:00
+#
+# See https://docs.fly.io/reference/configuration for information about how to use this file.
+#
+# APP_ENV=production is deliberate: startup is refused until the readiness checklist and the
+# two unimplemented security gates pass, so a deploy that is missing secrets fails its health
+# checks instead of serving the demo bypass or an unauthenticated build. Removing the block is
+# a reviewed change in backend/src/research_agent/config.py, not a configuration edit.
+
+app = 'research-agent-rosy-dawn-8813'
+# iad (Ashburn) is the app's primary region because Managed Postgres is not available in ewr;
+# the database must sit in the same region as the app. MPG regions: iad, ord, dfw, lax, sjc,
+# yyz, ams, fra, lhr, sin, syd, nrt, gru.
+primary_region = 'iad'
+
+[build]
+
+[env]
+  APP_ENV = 'production'
+
+# Scale to zero: Fly Proxy stops the only Machine when there is no traffic and starts it again
+# on the next request (a cold start of roughly two seconds or more). The in-process cleanup
+# schedule therefore runs only while a Machine is awake.
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+  # Liveness only. /readyz touches the database and would fail a deploy while a Machine is
+  # still starting; readiness is checked by the acceptance tests instead.
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
+
+[deploy]
+  # Migrations are explicit and repeatable, never run by application startup. The release
+  # command needs the DATABASE_URL secret and runs before the new version receives traffic.
+  release_command = 'research-agent-migrate'
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

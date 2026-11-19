@@ -147,6 +147,27 @@ quotas, Turnstile, the daily budget, concurrency caps and scheduled cleanup are 
 The remaining launch gates are **not implemented**.
 Deployment target: Fly.io. See [the milestone checklist](docs/PLAN.md).
 
+### Deployment is wired up but not enabled
+
+`fly.toml` and `.github/workflows/fly-deploy.yml` describe the production app, but nothing is
+deployed and deployment stays blocked until the launch gates in [SECURITY.md](SECURITY.md) pass.
+The Fly app exists but is empty (no Machines, no secrets); the Managed Postgres database has not
+been created. See [docs/DEPLOY.md](docs/DEPLOY.md) for the provisioning runbook and its progress
+table. The app runs in `iad` because Managed Postgres is not available in `ewr`.
+The app is configured to scale to zero: Fly Proxy stops the only Machine when there is no
+traffic and starts it on the next request, so the first visit after an idle period waits for a
+cold start, and the in-process cleanup schedule runs only while a Machine is awake.
+
+`APP_ENV=production` is set in `fly.toml`, so a deploy starts the readiness refusal instead of
+serving the demo bypass. That means the deploy cannot succeed until every production secret
+exists. `fly.toml` also sets a `/healthz` liveness check and a `research-agent-migrate` release
+command, which needs `DATABASE_URL` to be present as a Fly secret. Migrations still never run
+from application startup.
+
+The workflow is manual (`workflow_dispatch`) and runs in the GitHub `production` environment,
+so it needs an explicit approval and a `FLY_API_TOKEN` secret set on that environment. It never
+deploys on a merge. Do not create the app, the database or the secrets without approval.
+
 ## Checks
 
 See [AGENTS.md](AGENTS.md) for all commands and [SECURITY.md](SECURITY.md) for

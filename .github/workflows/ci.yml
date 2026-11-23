@@ -28,7 +28,7 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           python-version: '3.12'
       - run: uv sync --locked --group dev
@@ -90,7 +90,7 @@ jobs:
       E2E_DATABASE_URL: postgresql://research_test:ci-only-password@127.0.0.1:5432/research_agent_e2e
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           python-version: '3.12'
       - run: uv sync --locked --no-dev

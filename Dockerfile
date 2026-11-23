@@ -1,5 +1,5 @@
 # Development foundation; production mode intentionally fails until launch gates pass.
-FROM node:22.14-alpine AS web
+FROM node:26.13-alpine AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
